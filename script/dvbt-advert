@@ -13,8 +13,10 @@ use Linux::DVB::DVBT::Advert ;
 
 our $VERSION = "1.01" ;
 
+	my $process_state = "" ;
+	
 	my ($help, $man, $DEBUG, $VERBOSE, $dbg_logo, $dbg_frame, $dbg_audio, $dbg_ts) ;
-	my ($cutfile, $det, $use_file, $csv, $mode, $expected, $config, $channel, $cutmode, $write_cfg) ;
+	my ($cutfile, $det, $use_file, $adv, $mode, $expected, $config, $channel, $cutmode, $write_cfg) ;
 	GetOptions('v|verbose=s' => \$VERBOSE,
 			   'debug=i' => \$DEBUG,
 			   'dbg-logo=i' => \$dbg_logo,
@@ -25,9 +27,9 @@ our $VERSION = "1.01" ;
 			   'man' => \$man,
 			   'cfg=s' => \$config,
 			   'ch|chan|channel=s' => \$channel,
-			   'save=s' => \$det,
+			   'det=s' => \$det,
 			   'file=s' => \$use_file,
-			   'csv=s' => \$csv,
+			   'adv=s' => \$adv,
 			   'mode=i' => \$mode,
 			   'exp|expected=s' => \$expected,
 			   'cutfile=s' => \$cutfile,
@@ -89,6 +91,7 @@ print "Linux::DVB::DVBT::Advert version $Linux::DVB::DVBT::Advert::VERSION\n" ;
 		print "Detection...\n" ;
 		# detect($src, $settings_href, $channel, $ad_config_href, $detect)
 		$results_href = Linux::DVB::DVBT::Advert::detect($file, $settings_href, $channel, $ad_config_href, $det) ;
+		print STDERR "\n" ;
 	}
 	
 	my $results_settings_href = $results_href->{'settings'} || {} ;
@@ -108,7 +111,12 @@ print Data::Dumper->Dump(["Results settings:", $results_settings_href]) if $DEBU
 	
 	## Analyse
 	print "Analyse...\n" ;
-	my @cut_list = Linux::DVB::DVBT::Advert::analyse($file, $results_href, $ad_config_href, $channel, $csv, $expected_aref, $settings_href) ;
+	my @cut_list = Linux::DVB::DVBT::Advert::analyse($file, $results_href, $ad_config_href, $channel, $adv, $expected_aref, $settings_href) ;
+	
+	# free up memory
+	$results_href = {} ;
+	$settings_href = {} ;
+	$ad_config_href = {} ;
 
 	## print results
 	if (!@cut_list)
@@ -149,7 +157,25 @@ sub progress
 {
 	my ($state_str, $progress, $total) = @_ ;
 
-	printf STDERR "$state_str : $progress / $total (%d%%)\n", $progress*100/$total ;
+#	printf STDERR "$state_str : $progress / $total (%d%%)\n", $progress*100/$total ;
+
+	if ($state_str =~ /PREPROCESS/i)
+	{
+		$state_str = "Pre-processing: " ;
+	}
+	else
+	{
+		$state_str = "Detecting:      " ;
+	}
+	
+	if ($process_state ne $state_str)
+	{
+		print STDERR "100%\n" if $process_state ;
+		print STDERR $state_str ;
+		$process_state = $state_str ;
+	}
+	
+	printf STDERR "%3d%%\b\b\b\b", $progress*100/$total ;
 }
 
 
@@ -177,9 +203,9 @@ Options:
        -wrcfg               overwrite advert config file
        -cfg <config>        use specified DVBT config file
        -chan <chan>         specify channel (to determine settings)
-       -save <detfile>      save detection results to file
+       -det <detfile>       save detection results to file
        -file <detfile>      read detection results from file
-       -csv <advfile>       save analysis to file
+       -adv <advfile>       save analysis to file
        -mode <mode>         set detection mode
        -exp <expected>      read expected cut list
        -cutfile <cutfile>   set filename for cut file
@@ -209,7 +235,7 @@ Set debug level. Higher levels show more debugging information (only really of a
 
 =head1 DESCRIPTION
 
-TO DO COMPLETED.......
+TO BE COMPLETED.......
 
 =head1 FURTHER DETAILS
 

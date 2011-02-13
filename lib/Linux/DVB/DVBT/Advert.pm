@@ -41,8 +41,6 @@ Linux::DVB::DVBT::Advert - Advert (commercials) detection and removal
 
 =head1 DESCRIPTION
 
-This module provides the interface into the advert detection and removal utilities.
-
 Module provides the interface into the advert (commercials) detection and removal utilities. 
 As well as an underlying transport stream parsing framework, this module also incorporates 
 MPEG2 video decoding and AAC audio decoding (see L<Linux::DVB::DVBT::TS> module for full details).
@@ -115,7 +113,7 @@ our @EXPORT_OK = qw/
 #============================================================================================
 # GLOBALS
 #============================================================================================
-our $VERSION = '0.01' ;
+our $VERSION = '0.02' ;
 our $DEBUG = 0 ;
 
 our $CONFIG_DIR = $Linux::DVB::DVBT::Advert::Config::DEFAULT_CONFIG_PATH ;
@@ -911,10 +909,11 @@ a writeable directory (other than the default search path).
 
 sub write_default_config
 {
-	my ($force, $dir) = @_ ;
+	my ($force, $search_path) = @_ ;
 	
-	$dir ||= $CONFIG_DIR ;
-	my $fname = Linux::DVB::DVBT::Advert::Config::write_filename($CONFIG_DIR) ;
+	$search_path ||= $CONFIG_DIR ;
+	
+	my $fname = Linux::DVB::DVBT::Advert::Config::write_filename($search_path) ;
 	if ($fname)
 	{
 		## only write if it doesn't exist OR we're forced to overwrite
@@ -927,7 +926,7 @@ sub write_default_config
 			) ;
 			
 			# write config
-			Linux::DVB::DVBT::Advert::Config::write_default_dvb_adv(\%settings, $CONFIG_DIR) ;
+			Linux::DVB::DVBT::Advert::Config::write_default_dvb_adv(\%settings, $search_path) ;
 		}
 	}
 }
@@ -2783,8 +2782,8 @@ This module uses mpegaudiodec for AAC audio decoding:
 
  Copyright (C) 2004 Scott Michael
  
-Thanks to Erik Kaashoek for answering a few of my inane questions. Some of the detection code is based
-on the algorithms used in comskip (mainly logo detection and some of the black frame statistics).
+Thanks to Erik Kaashoek for answering a few of my inane questions, and thanks to Comskip
+for providing the inspiration for the detection algorithms.
 
 
 =head1 AUTHOR

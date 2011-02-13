@@ -1,13 +1,12 @@
-Linux-DVB-DVBT 
-==============
+Linux-DVB-DVBT-Advert
+=====================
 
-Linux::DVB::DVBT is a package that provides an object interface to any installed Freeview 
-tuner cards fitted to a Linux PC. The package supports initial set up (i.e. frequency scanning),
-searching for the latest electronic program guide (EPG), and selectign a channel for recording
-the video to disk.
+Linux::DVB::DVBT::Advert is a package that provides the interface into advert (commercials) detection and removal utilities. 
+As well as an underlying transport stream parsing framework, this module also incorporates 
+MPEG2 video decoding and AAC audio decoding (see L<Linux::DVB::DVBT::TS> module for full details).
 
 Example scripts have been provided in the package which illustrate the expected use of the package (and
-are useable programs in themeselves). For futher details please see 'perldoc Linux::DVB::DVBT'.
+are useable programs in themeselves). For futher details please see 'perldoc Linux::DVB::DVBT::Advert'.
 
 
 INSTALLATION
@@ -19,14 +18,6 @@ To install this module type the following:
    make test
    make install
 
-LARGE FILE SUPPORT
-
-I've added the appropriate compile options to enable the module to be compiled with large file support. These options will be enabled
-if your Perl build supports it (set in your config.pm when Perl was installed). Without this, recordings were limited to 2G (approx 2 hours).
-
-If you find you still have problems recording large files, then you can always use dvbt-ffrec (instead of dvbt-record). This gets ffmpeg to
-do the work of creating the file (and transcoding it to mpeg format).
-
 
 DEPENDENCIES
 
@@ -37,18 +28,6 @@ use File::Path ;
 use File::Spec ;
 use POSIX qw(strftime);
 
-
-DOCUMENTATION
-
-Along with the installed perldoc, you can optionally create the Doxygen HTML files for the C library. 
-This will be of little interest to general Perl users of the module, but may be of interest to developers
-or those that are trying to debug a problem with the module's interaction with their tuner.
-
-Just run
-
-	make doxygen
-	
-This will create HTML files in ./doxygen/html, the file ./doxygen/html/index.html is the top-level.
 
 DEBUG
 

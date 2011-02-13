@@ -7,8 +7,13 @@ ppport.h
 typemap
 
 lib/Linux/DVB/DVBT/Advert.pm
+lib/Linux/DVB/DVBT/Advert/Config.pm
+lib/Linux/DVB/DVBT/Advert/Constants.pm
+
+plib/Makeutils.pm
 
 Advert.xs
+
 xs/DVBT-ad-skip.c
 xs/DVBT-advert-c.c
 xs/DVBT-advert.c
@@ -24,16 +29,34 @@ xs/shared-ts/DVBT-ts-skip-c.c
 
 clib/dvb_ad_lib/Makefile
 clib/dvb_ad_lib/Subdir.mk
-clib/dvb_ad_lib/detect/advert.c
+clib/dvb_ad_lib/ts_advert.h
 clib/dvb_ad_lib/detect/ad_audio.c
 clib/dvb_ad_lib/detect/ad_audio.h
 clib/dvb_ad_lib/detect/ad_audio_struct.h
+clib/dvb_ad_lib/detect/ad_debug.c
+clib/dvb_ad_lib/detect/ad_debug.h
 clib/dvb_ad_lib/detect/ad_frame.c
 clib/dvb_ad_lib/detect/ad_frame.h
 clib/dvb_ad_lib/detect/ad_frame_struct.h
 clib/dvb_ad_lib/detect/ad_logo.c
 clib/dvb_ad_lib/detect/ad_logo.h
 clib/dvb_ad_lib/detect/ad_logo_struct.h
+clib/dvb_ad_lib/detect/advert.c
+
+clib/dvb_ts_lib/Subdir.mk
+clib/dvb_ts_lib/ts_cut.c
+clib/dvb_ts_lib/ts_cut.h
+clib/dvb_ts_lib/ts_parse.c
+clib/dvb_ts_lib/ts_parse.h
+clib/dvb_ts_lib/ts_skip.c
+clib/dvb_ts_lib/ts_skip.h
+clib/dvb_ts_lib/ts_split.c
+clib/dvb_ts_lib/ts_split.h
+
+clib/dvb_lib/Subdir-min.mk
+clib/dvb_lib/list.h
+clib/dvb_lib/dvb_error.c
+clib/dvb_lib/dvb_error.h
 
 clib/libmpeg2/Subdir.mk
 clib/libmpeg2/alloc.c
@@ -62,6 +85,7 @@ clib/libmpeg2/motion_comp_mmx.c
 clib/libmpeg2/mpeg2_internal.h
 clib/libmpeg2/slice.c
 clib/libmpeg2/vlc.h
+clib/libmpeg2/src/dump_state.c
 
 clib/mpeg2audio/Subdir.mk
 clib/mpeg2audio/avcodec.h
@@ -80,11 +104,21 @@ clib/mpeg2audio/rational.h
 clib/mpeg2audio/utils.c
 clib/mpeg2audio/win-inttypes.h
 
+clib/libmpeg2_stubs/include/mpeg2.h
+clib/libmpeg2_stubs/mpeg2_stubs.c
+clib/libmpeg2_stubs/Subdir.mk
+
+clib/mpeg2audio_stubs/Subdir.mk
+clib/mpeg2audio_stubs/mpegaudio.h
+clib/mpeg2audio_stubs/mpegaudio_stubs.c
+
 script/dvbt-advert
 
 t/00-boilerplate.t
 t/00-load.t
 t/01-basic.t
+t/02-use.t
+t/07-pod.t
 
 
 META.yml                                 Module meta-data (added by MakeMaker)
