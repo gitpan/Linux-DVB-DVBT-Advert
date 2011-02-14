@@ -396,7 +396,7 @@ use Data::Dumper ;
 
 use Linux::DVB::DVBT::Advert::Constants ;
 
-our $VERSION = '1.02' ;
+our $VERSION = '1.03' ;
 our $DEBUG = 0 ;
 
 our $DEFAULT_CONFIG_PATH = [ qw(/etc/dvb ~/.tv) ] ;
@@ -812,7 +812,7 @@ sub read_filename
 	$search_path ||= $DEFAULT_CONFIG_PATH ;
 	$DEFAULT_CONFIG_PATH = $search_path ;
 	
-	my $dir = read_dir($search_path, $FILENAME) ;
+	my $dir = read_dir($search_path, $FILENAME) || '.' ;
 	
 	return "$dir/$FILENAME" ;
 }
@@ -1052,9 +1052,9 @@ sub method_string
 	else
 	{
 		## special
-		foreach my $method_key (keys %{$Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method_special'}})
+		foreach my $method_key (keys %{$Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method_special'}})
 		{
-			my $method_val = $Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{$method_key} ;
+			my $method_val = $Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{$method_key} ;
 			if ($val == $method_val)
 			{
 				$method_str = $method_key ;
@@ -1066,9 +1066,9 @@ sub method_string
 	## Not found it yet, so work out the string
 	if (!$method_str)
 	{
-		foreach my $method_key (keys %{$Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method'}})
+		foreach my $method_key (keys %{$Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method'}})
 		{
-			my $method_val = $Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method'}{$method_key} ;
+			my $method_val = $Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method'}{$method_key} ;
 			if ($val & $method_val)
 			{
 				$method_str .= " + " if $method_str ;
@@ -1121,7 +1121,7 @@ print "parse_method($var, $val)\n" if $DEBUG >= 10 ;
 		
 		if ($val)
 		{
-			$val |= $Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{'MIN'} ;
+			$val |= $Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{'MIN'} ;
 		}
 	}
 	else
@@ -1153,7 +1153,7 @@ print "parse_method($var, $val)\n" if $DEBUG >= 10 ;
 					$op = $1 ;
 					if (!$got_base)
 					{
-						$method = $Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{'DEFAULT'} ;
+						$method = $Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{'DEFAULT'} ;
 						++$got_base ; 
 	print " + + + set base method=$method\n" if $DEBUG >= 10 ;
 					}
@@ -1163,13 +1163,13 @@ print "parse_method($var, $val)\n" if $DEBUG >= 10 ;
 				{
 					my $method_key = uc $token ;
 	print " + + a key $method_key\n" if $DEBUG >= 10 ;
-					if (exists($Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method'}{$method_key}))
+					if (exists($Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method'}{$method_key}))
 					{
 	print " + + + exists! (op=$op)\n" if $DEBUG >= 10 ;
 						if (!$op)
 						{
 							# Set method to this value
-							$method = $Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method'}{$method_key} ;
+							$method = $Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method'}{$method_key} ;
 							++$got_base ;
 	print " + + + set base method=$method\n" if $DEBUG >= 10 ;
 						}
@@ -1178,21 +1178,21 @@ print "parse_method($var, $val)\n" if $DEBUG >= 10 ;
 							if ($op eq '+')
 							{
 								## Add
-								$method |= $Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method'}{$method_key} ;
+								$method |= $Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method'}{$method_key} ;
 							}
 							else
 							{
 								## Subtract
-								$method &= ~$Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method'}{$method_key} ;
+								$method &= ~$Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method'}{$method_key} ;
 							}
 							$op = '' ;
 	print " + + + set method=$method\n" if $DEBUG >= 10 ;
 						}
 					}
-					elsif (exists($Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{$method_key}))
+					elsif (exists($Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{$method_key}))
 					{
 						## override with special value (e.g. 'default')
-						$method = $Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{$method_key} ;
+						$method = $Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{$method_key} ;
 						$op = '' ;
 	print " + + + set method=$method\n" if $DEBUG >= 10 ;
 					}
@@ -1202,7 +1202,7 @@ print "parse_method($var, $val)\n" if $DEBUG >= 10 ;
 	print " + method=$val\n" if $DEBUG >= 10 ;
 			
 			$method = 0 if $method < 0 ;
-			$method |= $Linux::DVB::DVBT::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{'MIN'} ; 
+			$method |= $Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'Advert'}{'detection_method_special'}{'MIN'} ; 
 			
 			$val = $method ;
 	print "METHOD: method=$val\n" if $DEBUG >= 10 ;

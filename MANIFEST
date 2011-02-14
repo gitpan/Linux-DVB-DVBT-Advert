@@ -114,10 +114,14 @@ clib/mpeg2audio_stubs/mpegaudio_stubs.c
 
 script/dvbt-advert
 
+t/cfg-full/dvb-adv
+t/cfg1/dvb-adv
 t/00-boilerplate.t
 t/00-load.t
 t/01-basic.t
 t/02-use.t
+t/03-config.t
+t/03-constants.t
 t/07-pod.t
 
 

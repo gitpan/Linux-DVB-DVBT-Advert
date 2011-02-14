@@ -1,5 +1,9 @@
 Revision history for Perl extension Linux::DVB::DVBT::Advert.
 
+0.03  Mon Feb 14 12:28:56 2008
+	- fixed typo in Config.pm (was not using the correct %CONSTANTS hash)
+	- added some more tests
+
 0.02  Sun Feb 13 10:20:56 2008
 	- fixed error in packaging
 

@@ -110,10 +110,14 @@ our @EXPORT_OK = qw/
 	write_default_config
 / ;
 
+our %EXPORT_TAGS = (
+	'all'	=> [ @EXPORT, @EXPORT_OK ],
+) ;
+
 #============================================================================================
 # GLOBALS
 #============================================================================================
-our $VERSION = '0.02' ;
+our $VERSION = '0.03' ;
 our $DEBUG = 0 ;
 
 our $CONFIG_DIR = $Linux::DVB::DVBT::Advert::Config::DEFAULT_CONFIG_PATH ;
@@ -161,9 +165,10 @@ my $_FRAMENUMS_KEY = '_framenums' ;
 
 #----------------------------------------------------------------------
 
-=item B<ad_config()>
+=item B<ad_config( [$search] )>
 
-Get advert configuration information from a config file.
+Get advert configuration information from a config file. Optionally sets the
+search path - which is an ARRAY ref containing the list of directories to search.
 
 Returns the HASH ref of advert settings.
 
@@ -171,6 +176,11 @@ Returns the HASH ref of advert settings.
 
 sub ad_config
 {
+	my ($search) = @_ ;
+	
+	$search ||= $CONFIG_DIR ;
+	$CONFIG_DIR = $search ;
+	
 	my $ad_config_href = Linux::DVB::DVBT::Advert::Config::read_dvb_adv($CONFIG_DIR) ;
 	return $ad_config_href ;
 }
@@ -912,6 +922,7 @@ sub write_default_config
 	my ($force, $search_path) = @_ ;
 	
 	$search_path ||= $CONFIG_DIR ;
+	$CONFIG_DIR = $search_path ;
 	
 	my $fname = Linux::DVB::DVBT::Advert::Config::write_filename($search_path) ;
 	if ($fname)
@@ -2719,6 +2730,12 @@ dump_frames(\@blocks, "Logo Blocks") if $DEBUG ;
 	}
 	
 	return @cut_list ;
+}
+
+#-----------------------------------------------------------------------------
+sub _no_once_warning
+{
+	return \%Linux::DVB::DVBT::Advert::Constants::CONSTANTS ;
 }
 
 
