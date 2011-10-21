@@ -1,5 +1,16 @@
 Revision history for Perl extension Linux::DVB::DVBT::Advert.
 
+0.04  Fri Oct 21 08:28:56 2011
+	- Fixed filename buffer that lead to intermittent segfaults
+	- fixed bug in det file write/read that lead to incorrect frame numbering
+	- corrected logo block start detection
+	- corrected mpeg2audio config.h
+	- updated to display config at beginning of make
+	- Major re-write to use memory structures managed under XS rather than Perl (to reduce
+	  memory footprint for large videos)
+	- Corrected logo pre-processing - now stops after "logo_checking_period" period (rather than running to end of video)
+
+
 0.03  Mon Feb 14 12:28:56 2008
 	- fixed typo in Config.pm (was not using the correct %CONSTANTS hash)
 	- added some more tests

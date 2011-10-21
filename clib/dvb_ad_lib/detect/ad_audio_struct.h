@@ -6,6 +6,8 @@
 #ifndef AD_AUDIO_STRUCT_H_
 #define AD_AUDIO_STRUCT_H_
 
+#include "ad_perl_struct.h"
+
 // 16-bit results
 #define MAX_VOL		0xffff
 
@@ -24,6 +26,9 @@ struct Ad_audio_settings {
 
 	// threshold below which audio is treated as silence (set in dB e.g. -26 for threshold = -26dB)
 	int		silence_threshold ;
+
+	struct Ad_perl_settings perl_set ;
+	unsigned silence_window ;
 
 } ;
 

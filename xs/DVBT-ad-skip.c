@@ -95,7 +95,11 @@ dvb_ad_split(char *filename, char *ofilename, SV *cuts_aref, HV *settings_href=N
 		unsigned		start ;
 		unsigned		end ;
 
+		unsigned DEBUG_SPLIT=0 ;
+
 	CODE:
+		if (DEBUG_SPLIT) fprintf(stderr, "dvb_ad_split() - start\n") ;
+
 		dvb_error_clear() ;
 		clear_settings(&settings) ;
 
@@ -105,6 +109,11 @@ dvb_ad_split(char *filename, char *ofilename, SV *cuts_aref, HV *settings_href=N
 			HVF_IV(settings_href, save_cut, settings.save_cut) ;
 			HVF_SVV(settings_href, error_callback, settings.error_callback) ;
 			HVF_SVV(settings_href, user_data, settings.perl_data) ;
+		}
+
+		if (DEBUG_SPLIT)
+		{
+			if (!settings.debug) settings.debug=10 ;
 		}
 
 		// fprintf(stderr, "cuts_aref ok = %d\n", SvROK(cuts_aref)) ;
@@ -124,6 +133,7 @@ dvb_ad_split(char *filename, char *ofilename, SV *cuts_aref, HV *settings_href=N
 		 	croak("Linux::DVB::DVBT::Advert::dvb_ad_split requires a list of cuts hashes") ;
 		}
 
+		if (DEBUG_SPLIT) fprintf(stderr, " + create cut list\n") ;
 
 		// Create cut list
 		INIT_LIST_HEAD(&cut_list);
@@ -150,10 +160,13 @@ dvb_ad_split(char *filename, char *ofilename, SV *cuts_aref, HV *settings_href=N
 		}
 
 
-		//_print_cut_list("__INITIAL__", &cut_list) ;
+		if (DEBUG_SPLIT) _print_cut_list("__INITIAL__", &cut_list) ;
+
 
 		// split (frees the cut_list)
 		RETVAL = ts_split(filename, ofilename, &cut_list, settings.debug) ;
+
+		if (DEBUG_SPLIT) fprintf(stderr, "dvb_ad_split() - end\n") ;
 
 	OUTPUT:
      RETVAL

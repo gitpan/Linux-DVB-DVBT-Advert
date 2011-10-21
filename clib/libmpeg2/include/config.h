@@ -1,4 +1,4 @@
-/* i586-linux-thread-multi */
+/* i486-linux-gnu-thread-multi */
 #ifndef CONFIG_H
 #define CONFIG_H
 	
@@ -155,7 +155,7 @@
 
 /* Define to empty if the keyword `volatile' does not work. Warning: valid
    code using `volatile' can become incorrect without. Disable with care. */
-/* #define CONST  */
+/* #define volatile  */
 
 #endif
 

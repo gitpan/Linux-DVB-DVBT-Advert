@@ -5,11 +5,12 @@
 #include "ppport.h"
 
 /*---------------------------------------------------------------------------------------------------*/
-#include "xs/shared/DVBT-common.h"
+#include "xs/shared-ts/shared/DVBT-common.h"
 #include "xs/DVBT-specific.h"
 
 #include "xs/shared-ts/DVBT-ts-shared-c.c"
 #include "xs/DVBT-advert-c.c"
+#include "xs/DVBT-ad-tie-c.c"
 
 #define DVBT_AD_VERSION		"1.00"
 
@@ -23,6 +24,7 @@ INCLUDE: xs/DVBT-const.c
 
 INCLUDE: xs/DVBT-advert.c
 INCLUDE: xs/DVBT-ad-skip.c
+INCLUDE: xs/DVBT-ad-tie.c
 
 
  # /*---------------------------------------------------------------------------------------------------*/

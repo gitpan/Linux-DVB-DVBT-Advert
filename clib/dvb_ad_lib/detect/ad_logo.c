@@ -18,7 +18,23 @@
 #include "ad_logo.h"
 #include "ad_debug.h"
 
+//===========================================================================================================================
+// CONSTANTS
+//===========================================================================================================================
 
+// Logo default Perl settings
+#define LOGO_max_advert			(3*60*FPS)
+#define LOGO_min_advert			(3*60*FPS)
+#define LOGO_min_program		(5*60*FPS)
+#define LOGO_start_pad			(2*60*FPS)
+#define LOGO_end_pad			(2*60*FPS)
+#define LOGO_min_frames 	 	FPS
+#define LOGO_frame_window 	 	20
+#define LOGO_max_gap 		 	(10*FPS)
+#define LOGO_reduce_end			0
+#define LOGO_reduce_min_gap	 	(10*FPS)
+
+// settings
 #define MIN_EDGES			350
 #define MAX_EDGES			40000
 #define CHECK_PERCENT		90
@@ -26,10 +42,21 @@
 // ignore any pixels brighter than this
 #define MAX_BRIGHT			200
 
+#define RISE_THRESHOLD		80
+#define FALL_THRESHOLD		50
+
+//===========================================================================================================================
+// MACROS
+//===========================================================================================================================
+
+
 // print debug if debug setting is high enough
 #define logo_dbg_prt(LVL, ARGS)	\
 		if (screen_info->settings.debug >= LVL)	printf ARGS
 
+//===========================================================================================================================
+// FUNCTIONS
+//===========================================================================================================================
 
 //---------------------------------------------------------------------------------------------------------------------------
 void dump_edge_ppm(char *fmt, struct Ad_logo_buff *edge, unsigned height, unsigned width, unsigned framenum, unsigned scale)
@@ -176,7 +203,6 @@ fprintf(stderr, "\n\n") ;
 				}
 			}
 			++logo ;
-//			fprintf(stderr, " ") ;
 		}
 		fprintf(stderr, "\n") ;
 	}
@@ -746,14 +772,12 @@ int	edge_weight = 10;
 							screen_info->logo[this_xy].horiz = 0 ;
 							--screen_info->logo_edges ;
 							logo_dbg_prt(2, ("CLEAR: x %d y %d - horiz (count %d) : edges %d\n", x, y, count, screen_info->logo_edges)) ;
-//							if (screen_info->settings.debug >= 2) fprintf(stderr, "CLEAR: x %d y %d - horiz (count %d) : edges %d\n", x, y, count, screen_info->logo_edges ) ;
 						}
 						else
 						{
 							screen_info->logo[this_xy].vert = 0 ;
 							--screen_info->logo_edges ;
 							logo_dbg_prt(2, ("CLEAR: x %d y %d - vert (count %d) : edges %d\n", x, y, count, screen_info->logo_edges)) ;
-//							if (screen_info->settings.debug >= 2) fprintf(stderr, "CLEAR: x %d y %d - vert (count %d) : edges %d\n", x, y, count, screen_info->logo_edges ) ;
 						}
 					}
 				} // if temp
@@ -815,9 +839,6 @@ unsigned edge_step = screen_info->settings.logo_edge_step ;
 	logo_dbg_prt(2, ("\nSet area [Area: %d,%d .. %d,%d] found=%d\n",
 			screen_info->logo_x1,screen_info->logo_y1, screen_info->logo_x2,screen_info->logo_y2,
 			found)) ;
-//	if (screen_info->settings.debug >= 2) fprintf(stderr, "\nSet area [Area: %d,%d .. %d,%d] found=%d\n",
-//												screen_info->logo_x1,screen_info->logo_y1, screen_info->logo_x2,screen_info->logo_y2,
-//												found);
 }
 
 //---------------------------------------------------------------------------------------------------------------------------
@@ -838,7 +859,6 @@ unsigned edges=0;
 	// clear results
 	memset(screen_info->logo, 0, screen_info->buff_size * sizeof(struct Ad_logo_buff)) ;
 
-//fprintf(stderr, "logo_set()\n") ;
 	for (y = start_row; y < sample_height; y ++)
 	{
 		xy = y * screen_info->width + start_col ;
@@ -849,19 +869,14 @@ unsigned edges=0;
 		{
 			if (tp->horiz >= screen_info->num_frames)
 			{
-//fprintf(stderr, " + horiz @ %d,%d\n", x, y) ;
-//++edges ;
 				logo->horiz = 1 ;
 			}
 			if (tp->vert >= screen_info->num_frames)
 			{
-//fprintf(stderr, " + horiz @ %d,%d\n", x, y) ;
-//++edges ;
 				logo->vert = 1 ;
 			}
 		}
 	}
-//fprintf(stderr, "logo_set() - edges %d\n", edges) ;
 }
 
 
@@ -965,7 +980,6 @@ unsigned edges = 0, hedges = 0, vedges = 0 ;
 	screen_info->logo_edges = edges ;
 
 	logo_dbg_prt(1, ("Edge count - %d (Horiz %d, Vert %d)\n", edges, hedges, vedges)) ;
-//	fprintf(stderr, "Edge count - %d (Horiz %d, Vert %d)\n", edges, hedges, vedges) ;
 
 	if ( (hedges < 50) || (vedges < 50))
 	{
@@ -1005,17 +1019,13 @@ unsigned logoInfoAvailable = 0 ;
 		{
 			logo_dbg_prt(1, ("Edge count - %i\tPercentage of screen - %d%% TOO BIG, CAN'T BE A LOGO.\n",
 					logo_edges, logoPercentageOfScreen)) ;
-//			fprintf(stderr, "Edge count - %i\tPercentage of screen - %d%% TOO BIG, CAN'T BE A LOGO.\n",
-//					logo_edges, logoPercentageOfScreen) ;
 
 			logoInfoAvailable = 0;
 		}
 		else
 		{
 			logo_dbg_prt(1, ("Edge count - %i\tPercentage of screen - %.2f%% May be LOGO - double check count=%d.\n",
-					logo_edges, logoPercentageOfScreen * 100, doublCheckLogoCount)) ;
-//			fprintf(stderr, "Edge count - %i\tPercentage of screen - %.2f%% May be LOGO - double check count=%d.\n",
-//					logo_edges, logoPercentageOfScreen * 100, doublCheckLogoCount) ;
+					logo_edges, logoPercentageOfScreen * 100.0, doublCheckLogoCount)) ;
 			logoInfoAvailable = 1;
 		}
 	}
@@ -1048,13 +1058,11 @@ unsigned logoInfoAvailable = 0 ;
 
 
 		logo_dbg_prt(1, ("Double-checking frames for logo.\n")) ;
-//		fprintf(stderr, "Double-checking frames for logo.\n");
 		for (findex = 0; findex < screen_info->frames_stored; findex++)
 		{
 			unsigned match_percent = logo_test(screen_info, screen_info->frame_buffer[findex]) ;
 
 			logo_dbg_prt(1, ("Test %d - %d%%\n", findex, match_percent)) ;
-//			fprintf(stderr, "Test %d - %d%%\n", findex, match_percent);
 
 			if (match_percent >= screen_info->settings.logo_ok_percent)
 			{
@@ -1094,6 +1102,24 @@ void logo_init_settings(struct Ad_logo_settings *settings)
 	settings->logo_ave_points = 250 ;
 
 	settings->window_percent = WINDOW_PERCENT;
+
+	// Perl settings
+	settings->logo_rise_threshold = RISE_THRESHOLD;
+	settings->logo_fall_threshold = FALL_THRESHOLD;
+
+	// set_perl_settings(settings, mx_ad, mn_ad, mn_pr, s_pd, e_pd, mn_fr, fr_wn, mx_gp, r_en, r_mn_gp)
+	set_perl_settings(settings,
+		LOGO_max_advert,
+		LOGO_min_advert,
+		LOGO_min_program,
+		LOGO_start_pad,
+		LOGO_end_pad,
+		LOGO_min_frames,
+		LOGO_frame_window,
+		LOGO_max_gap,
+		LOGO_reduce_end,
+		LOGO_reduce_min_gap
+	) ;
 
 }
 
@@ -1160,21 +1186,27 @@ unsigned framenum = frameinfo->framenum ;
 
 
 	logo_dbg_prt(1, ("screen : w %d x h %d\n", screen_info->width, screen_info->height)) ;
-//fprintf(stderr, "screen : w %d x h %d\n", screen_info->width, screen_info->height) ;
-
 	logo_dbg_prt(1, ("FRAME %5d: %d x %d [%d x %d]] ",
 			framenum, info->sequence->width, info->sequence->height,
 			info->sequence->width, info->sequence->height)) ;
-
-//if (settings->debug) fprintf(stderr, " - stored %d totalled %d ", screen_info->frames_stored, screen_info->frames_totalled) ;
-//if (settings->debug >= 2) fprintf(stderr, "\n") ;
-
 
 	// add to buffer
 	logo_buffer_frame(screen_info, info->display_fbuf->buf[0], framenum) ;
 
 	// edge detect
 	edge_detect(screen_info, info->display_fbuf->buf[0]) ;
+
+
+	// check for search abandon
+	if (framenum >= settings->logo_checking_period)
+	{
+		logo_dbg_prt(1, ("+*+*+ Aborted +*+*+ \n")) ;
+
+		// stop now
+		tsreader_stop(tsreader) ;
+		return ;
+	}
+
 
 	// Ok to check yet?
 	if (screen_info->frames_totalled >= screen_info->num_frames)
@@ -1188,7 +1220,6 @@ unsigned framenum = frameinfo->framenum ;
 		{
 			// logo not found - restart
 			logo_dbg_prt(1, ("LOGO not found - restarting...\n")) ;
-//			fprintf(stderr, "LOGO not found - restarting...\n") ;
 			logo_init(screen_info) ;
 		}
 		else
@@ -1199,7 +1230,6 @@ unsigned framenum = frameinfo->framenum ;
 			state->logo_screen = screen_info ;
 
 			logo_dbg_prt(1, ("+*+*+ Finished +*+*+ \n")) ;
-//			fprintf(stderr, "+*+*+ Finished +*+*+ \n") ;
 
 			if (screen_info->settings.debug) dump_logo_text(screen_info) ;
 			tsreader_stop(tsreader) ;

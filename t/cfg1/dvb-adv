@@ -18,13 +18,13 @@
 
 
 # maximum length of a single advert (in frames)
-#max_advert = 4500
+max_advert = 1111
 
 # minimum length of advert period (cut period) excludes prog change (in frames)
-#min_advert = 4500
+min_advert = 11111
 
 # minimum length of a program (in frames)
-#min_program = 7500
+min_program = 111111
 
 # padding at start of recording (in frames)
 #start_pad = 3000
@@ -146,7 +146,7 @@
 #logo.min_frames = 25
 
 # fuzziness window when contracting frames into a block
-#logo.frame_window = 20
+logo.frame_window = 111111
 
 # widest gap (no valid frames) over which to span when contracting frames into a block
 #logo.max_gap = 250

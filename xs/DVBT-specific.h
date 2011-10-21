@@ -1,3 +1,6 @@
+#include "ts_advert.h"
+#include "detect/ad_file.h"
+
 /*---------------------------------------------------------------------------------------------------*/
 
 // If large file support is not included, then make the value do nothing

@@ -1,4 +1,4 @@
-/* i586-linux-thread-multi */
+/* i486-linux-gnu-thread-multi */
 #ifndef CONFIG_H
 #define CONFIG_H
 	
@@ -41,8 +41,8 @@
 #define HAVE_FTIME 1
 
 /* Define to 1 if you have the `lrintf' function. */
+/* #define HAVE_LRINTF 1 */
 #define HAVE_LRINTF 1
-
 
 
 /* Define to 1 if you have the `gettimeofday' function. */
@@ -144,7 +144,7 @@
 /* Define to `__inline__' or `__inline' if that's what the C compiler
    calls it, or to nothing if 'inline' is not supported under any name.  */
 #ifndef __cplusplus
-#define inline 
+
 #endif
 
 /* Define as `__restrict' if that's what the C compiler calls it, or to
@@ -165,7 +165,7 @@
 
 /* Define to empty if the keyword `volatile' does not work. Warning: valid
    code using `volatile' can become incorrect without. Disable with care. */
-/* #define CONST  */
+/* #define volatile  */
 
 #ifndef _WIN32
 

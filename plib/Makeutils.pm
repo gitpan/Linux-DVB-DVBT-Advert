@@ -40,6 +40,8 @@ our @EXPORT = qw/
 	add_install_progs
 	add_defines
 	get_makeopts
+	process_makeopts
+	update_manifest
 	add_objects
 	add_clibs
 	c_try
@@ -56,20 +58,22 @@ our @EXPORT = qw/
 	have_h
 	have_d
 	havent_d
-	have_h
 	have_func
 	arch_name
 	get_config
+	get_makemakerdflt
 / ;
 
 
 #============================================================================================
 # GLOBALS
 #============================================================================================
-our $VERSION = '0.03' ;
+our $VERSION = '1.07' ;
 our $DEBUG = 0 ;
+our $UPDATE_MANIFEST = 0 ;
 
 our %ModuleInfo ;
+
 
 #============================================================================================
 
@@ -79,6 +83,8 @@ our %ModuleInfo ;
 sub init 
 {
 	my ($modname) = @_ ;
+	
+	print "(Using Makeutils.pm version $VERSION)\n" ;
 	
 	my $name = $modname ;
 	unless ($name)
@@ -121,6 +127,10 @@ sub init
 		'mod_defines'	=> "",
 		'make_defines'	=> "",
 		
+		## Flags
+		'CCFLAGS'		=> '-o $@',
+		'OPTIMIZE'		=> '-O3',
+		
 		# included c-libraries
 		'clibs'			=> {},
 		'includes'		=> "",
@@ -132,6 +142,9 @@ sub init
 		'obj_list' 		=> [],
 		
 		'config'		=> {},
+		
+		'COMMENTS'		=> {},
+		'C_TRY'			=> {},
 		
 	) ;
 	
@@ -172,7 +185,7 @@ EOW
 	}
 	
 	$progs_aref ||= [] ;
-	$ModuleInfo{'programs'} = [ map "$basedir/$_", @$progs_aref ] ;
+	$ModuleInfo{'programs'} = [ map "$basedir$_", @$progs_aref ] ;
 	
 	return @$progs_aref ;
 }
@@ -204,12 +217,12 @@ sub add_defines
 sub get_makeopts
 {
 	## -D = debug 
-	my $DEBUG = 0 ;
+	$Makeutils::DEBUG = 0 ;
 	if ( 
 		grep $_ eq '-D', @main::ARGV
 	) 
 	{
-		$DEBUG = 1 ;
+		$Makeutils::DEBUG = 1 ;
 	} 
 	
 	## -d = debug 
@@ -222,10 +235,150 @@ sub get_makeopts
 		add_defines({
 			'DEBUG'		=> 1,
 		}) ;
+		
+		# compile for debug
+		$ModuleInfo{'OPTIMIZE'} = '-ggdb -O0' ;
+	} 
+	
+	## -M = udpate MANIFEST 
+	$Makeutils::UPDATE_MANIFEST = 0 ;
+	if ( 
+		grep $_ eq '-M', @main::ARGV
+	) 
+	{
+		$Makeutils::UPDATE_MANIFEST = 1 ;
 	} 
 	
 }
 
+
+##-------------------------------------------------------------------------------------------
+sub process_makeopts
+{
+	if ($Makeutils::UPDATE_MANIFEST)
+	{
+		update_manifest() ;
+	}	
+}
+
+##-------------------------------------------------------------------------------------------
+sub update_manifest
+{
+	## Read file
+	my %manifest ;
+	my $line ;
+	open my $fh, "<MANIFEST" or die "Error: Unable to read MANIFEST file" ;
+	while(defined($line = <$fh>))
+	{
+		chomp $line ;
+		$line =~ s/[^[:ascii:]]/ /g;
+		$line =~ s/^\s+// ;
+		$line =~ s/\s+$// ;
+		$line =~ s/^#.*// ;
+		next unless $line ;
+
+		$manifest{$line} = 1 ;		
+	}
+	close $fh ;
+	
+	## Build expected list
+	my @expected = qw(
+		MANIFEST
+		README
+		COPYING
+		Changes
+		Makefile.PL
+		plib/Makeutils.pm
+		ppport.h
+		typemap
+	) ;
+	
+	# xs
+	push @expected, "$ModuleInfo{'root'}.xs" ;
+	push @expected, find_recurse("xs", "*.xs") ;
+	
+	# t
+	push @expected, find_recurse("t", "*.t") ;
+	
+	# scripts
+	push @expected, @{$ModuleInfo{'programs'}} ;
+	
+	# Perl
+	push @expected, find_recurse("lib", "*.pm") ;
+	
+	# C
+	push @expected, find_recurse("clib", "*.c") ;
+	push @expected, find_recurse("clib", "*.h") ;
+	
+	
+	## Find any missing
+	my @missing ;
+	foreach my $file (@expected)
+	{
+		if (!exists($manifest{$file}))
+		{
+			push @missing, $file ;
+		}
+	}
+
+	print "\nUpdating MANIFEST\n" ;
+	print   "=================\n" ;
+	if (@missing)
+	{
+		## Append
+		open my $fh, ">>MANIFEST" or die "Error: Unable to write to MANIFEST file" ;
+		print $fh "\n\n## Missing files:\n" ;
+		foreach my $file (@missing)
+		{
+			print $fh "$file\n" ;
+		}
+		close $fh ;
+		
+		print "Appended ", scalar(@missing), " files:\n" ;
+		foreach my $file (@missing)
+		{
+			print "  $file\n" ;
+		}
+	}
+	else
+	{
+		print "No files missing\n" ;
+	}
+	
+	
+	print "\nAll Files:\n" ;
+	foreach my $file (@expected)
+	{
+		print "  $file\n" ;
+	}
+	
+	exit 0 ;
+}
+
+##-------------------------------------------------------------------------------------------
+sub find_recurse
+{
+	my ($dir, $spec) = @_ ;
+	my @files = () ;
+	
+	# depth last
+	foreach my $f (glob("$dir/$spec"))
+	{
+		if (-f $f)
+		{
+			push @files, $f ;
+		}
+	}
+	foreach my $d (glob("$dir/*"))
+	{
+		if (-d $d)
+		{
+			push @files, find_recurse($d, $spec) ;
+		}
+	}
+	
+	return @files ;
+}
 
 ##-------------------------------------------------------------------------------------------
 sub add_objects
@@ -264,6 +417,8 @@ sub add_clibs
 {
 	my ($basedir, $clibs_href) = @_ ;
 
+	print "add_clibs($basedir)\n" if $DEBUG ;
+	
 	## Include makefiles & get objects
 	print "Including makefiles from sub libraries:\n" ;
 	foreach my $lib (keys %$clibs_href)
@@ -279,15 +434,24 @@ sub add_clibs
 		print " * $lib ... " ;
 		my $mkf = "$libdir/" ;
 		my $specified_mkf = 0 ;
-		if ( (ref($clibs_href->{$lib}) eq 'HASH') && (exists($clibs_href->{$lib}{'mkf'})) )
+		if ( ref($clibs_href->{$lib}) eq 'HASH')
 		{
-			++$specified_mkf ;
-			$mkf .= $clibs_href->{$lib}{'mkf'} ;
+			if ( exists($clibs_href->{$lib}{'mkf'})) 
+			{
+				++$specified_mkf ;
+				$mkf .= $clibs_href->{$lib}{'mkf'} ;
+			}
+			else
+			{
+				$mkf .= 'Subdir.mk' ;
+			}
 		}
 		else
 		{
 			$mkf .= 'Subdir.mk' ;
 		}
+
+	print "\n * * mkf = $mkf\n" if $DEBUG ;
 		
 		## read file
 		if (-f $mkf)
@@ -342,7 +506,7 @@ sub add_clibs
 		}
 		
 		## check for any include subdirs
-		for my $incdir (qw/include inc h/)
+		for my $incdir (qw/include inc h shared/)
 		{
 			if (-d "$libdir$incdir")
 			{
@@ -361,7 +525,7 @@ sub add_clibs
 				my $func = $clibs_href->{$lib}{'config'}{'func'} ;
 				my $config_h = "$basedir/$lib/$clibs_href->{$lib}{'config'}{'file'}" ;
 
-				print "creating config file... " ;
+				print "creating config file $config_h ... " ;
 				&$func($config_h, %{$ModuleInfo{'config'}}) ;
 				print "ok\n" ;
 			}
@@ -408,32 +572,38 @@ sub _create_includes_list
 }
 
 ##-------------------------------------------------------------------------------------------
-sub c_try
+sub _c_try
 {
-	my ($msg, $code, $ok_val, $cflags) = @_ ;
-	
+	my ($info_tag, $cc, $target, $msg, $code, $ok_val, $cflags, $exec_out_ref) = @_ ;
+
 if ($DEBUG && $msg)
 {
 print "\n-------------------------\n" ;
 }		
-
+	if ($info_tag)
+	{
+		$ModuleInfo{'C_TRY'}{$info_tag} ||= [] ;
+	}
+	
 	print "$msg... " if $msg ;
 
+	$ok_val=1 unless defined $ok_val ;
+	
 	$cflags ||= "" ;
 	my $ok = "" ;
 	my $conftest = "conftest.c" ;
 	my $conferr = "conftest.err" ;
-	my $confobj = "conftest.o" ;
 	
 	open my $fh, ">$conftest" or die "Error: unable to create test file $conftest : $!";
 	print $fh $code ;
 	close $fh ;
 	
-	unlink $confobj ;
+	unlink $target ;
 	
-	my $rc = system("$Config{'cc'} -c $conftest $cflags -o $confobj 2> $conferr") ;
+	my $cmd = "$cc $conftest $cflags 2> $conferr" ;
+	my $rc = system($cmd) ;
 	my $errstr ;
-	open my $fh, "<$conferr" ;
+	open $fh, "<$conferr" ;
 	if ($fh)
 	{
 		$errstr = do { local $/; <$fh> } ;
@@ -450,30 +620,69 @@ print "- Code:\n" ;
 print "- - - - - - - - - - - - -\n" ;
 print "$code\n" ;
 print "- - - - - - - - - - - - -\n" ;
+print "- Cmd: $cmd\n" ;
+print "- - - - - - - - - - - - -\n" ;
+print "- Target: $target [size=", -s $target, "]\n" ;
+print "- - - - - - - - - - - - -\n" ;
 print "- Compile errors:\n" ;
 print "- - - - - - - - - - - - -\n" ;
 print "$errstr" ;
 }		
 
+	if ($info_tag)
+	{
+		my $size = -s $target || 0 ;
+		push @{$ModuleInfo{'C_TRY'}{$info_tag}}, (
+"- - - - - - - - - - - - -",
+"- RC: $rc",
+"- - - - - - - - - - - - -",
+"- Code:",
+"- - - - - - - - - - - - -",
+"$code",
+"- - - - - - - - - - - - -",
+"- Cmd: $cmd",
+"- - - - - - - - - - - - -",
+"- Target: $target [size=$size]",
+"- - - - - - - - - - - - -",
+"- Compile errors:",
+"- - - - - - - - - - - - -",
+"$errstr" 
+		) ;
+	}
+
 	# check for errors
-	if ( ($rc==0) && (!$errstr) && (-s $confobj) )
+	if ( ($rc==0) && (!$errstr) && (-s $target) )
 	{
 		# stop here because this worked
 		$ok = $ok_val ;
+		
+#		## See if we want to run the code
+#		if ($exec_out_ref && ref($exec_out_ref))
+#		{
+#			my @out = `./$conftest` ;
+#		}
 	}
 	
 	unlink $conftest ;
 	unlink $conferr ;
-	unlink $confobj ;
 
 	if ($msg)
 	{
 		if ($DEBUG)
 		{
 			print "- - - - - - - - - - - - -\n" ;
-			print "- Return: " ;
+			print "- Return: [ok=$ok] " ;
 		}
-		print $ok ? "$ok\n" : "no\n" ;		
+#		print $ok ? "$ok\n" : "no\n" ;		
+		print $ok ? "yes\n" : "no\n" ;		
+	}
+
+	if ($info_tag)
+	{
+		push @{$ModuleInfo{'C_TRY'}{$info_tag}}, (
+"- - - - - - - - - - - - -",
+"- Return: [ok=$ok]" 
+		) ;
 	}
 
 if ($DEBUG && $msg)
@@ -485,10 +694,43 @@ print "-------------------------\n\n" ;
 	return $ok ;
 }
 
+
+##-------------------------------------------------------------------------------------------
+sub c_try
+{
+	my ($info_tag, $msg, $code, $ok_val, $cflags, $exec_out_ref) = @_ ;
+
+	my $confobj = "conftest.o" ;
+	my $cc = "$Config{'cc'}  -o $confobj -c" ;
+
+	my $ok = _c_try($info_tag, $cc, $confobj, $msg, $code, $ok_val, $cflags, $exec_out_ref) ;
+
+	unlink $confobj ;
+
+	return $ok ;
+}
+
+##-------------------------------------------------------------------------------------------
+sub c_try_link
+{
+	my ($info_tag, $msg, $code, $ok_val, $cflags, $exec_out_ref, $ld_flags) = @_ ;
+
+	$ld_flags ||= "" ;
+	
+	my $target = "conftest$Config{_exe}" ;
+	my $cc = "$Config{'cc'} -o $target $ld_flags" ;
+
+	my $ok = _c_try($info_tag, $cc, $target, $msg, $code, $ok_val, $cflags, $exec_out_ref) ;
+
+	unlink $target ;
+
+	return $ok ;
+}
+
 ##-------------------------------------------------------------------------------------------
 sub c_try_keywords
 {
-	my ($msg, $code, $keywords_aref, $cflags) = @_ ;
+	my ($info_tag, $msg, $code, $keywords_aref, $cflags) = @_ ;
 	
 
 if ($DEBUG)
@@ -510,7 +752,7 @@ print "\n-------------------------\n" ;
 
 		my $code_str = $code ;
 		$code_str =~ s/\$ac_kw/$ac_kw/g ;
-		$ok = c_try("", $code_str, $ac_kw, $cflags) ;
+		$ok = c_try($info_tag, "", $code_str, $ac_kw, $cflags) ;
 		
 		if ($ok)
 		{
@@ -549,7 +791,7 @@ $ac_kw foo_t foo () {return 0; }
 
 _ACEOF
 	
-	my $ac_c_inline = c_try_keywords('checking for inline', $code, [qw/inline __inline__ __inline/]) ;
+	my $ac_c_inline = c_try_keywords('inline', 'checking for inline', $code, [qw/inline __inline__ __inline/]) ;
 	return $ac_c_inline ;
 }
 
@@ -565,7 +807,7 @@ int foo (int a)
 }
 _ACEOF
 	
-	my $ok = c_try('checking for builtin expect', $code, 1) ;
+	my $ok = c_try('expect', 'checking for builtin expect', $code, 1) ;
 	
 	return $ok ? "#define HAVE_BUILTIN_EXPECT 1" : "" ;
 }
@@ -584,7 +826,7 @@ long int b ;
 }
 _ACEOF
 	
-	my $ok = c_try('checking for lrintf', $code, 1) ;
+	my $ok = c_try('lrintf', 'checking for lrintf', $code, 1) ;
 	
 	return $ok ? "#define HAVE_LRINTF 1" : "" ;
 }
@@ -616,7 +858,7 @@ __attribute__ ((__always_inline__)) void f (void);
 }
 _ACEOF
 
-		$ac_c_always_inline = c_try('checking for always_inline', $code, '__attribute__ ((__always_inline__))') ;
+		$ac_c_always_inline = c_try('always_inline', 'checking for always_inline', $code, '__attribute__ ((__always_inline__))') ;
 	}
 	
 	return $ac_c_always_inline ;
@@ -638,7 +880,7 @@ char * $ac_kw p;
 
 _ACEOF
 	
-	my $ac_c_restrict = c_try_keywords('checking for restrict', $code, [qw/restrict __restrict__ __restrict/]) ;
+	my $ac_c_restrict = c_try_keywords('restrict', 'checking for restrict', $code, [qw/restrict __restrict__ __restrict/]) ;
 	return $ac_c_restrict ;
 }
 
@@ -660,7 +902,7 @@ main ()
 }
 _ACEOF
 	
-	my $ac_has_header = c_try("checking for $header", $code, $header, '-Wall -Werror') ;
+	my $ac_has_header = c_try($header, "checking for $header", $code, $header, '-Wall -Werror') ;
 	return $ac_has_header ;
 }
 
@@ -710,8 +952,48 @@ return $ac_func ();
 }
 _ACEOF
 	
-	my $ac_has_function = c_try("checking for $ac_func", $code, $ac_func, '-Wall -Werror', "1") ;
+#	c_try_link($msg, $code, $ok_val, $cflags, $exec_out_ref, $ld_flags) ;
+	my $ac_has_function = c_try_link($ac_func, "checking for $ac_func", $code, $ac_func, '-Wall -Werror') ;
 	return $ac_has_function ;
+}
+
+
+##-------------------------------------------------------------------------------------------
+sub c_has_math_function
+{
+	my ($ac_func) = @_ ;
+
+	my $code = <<_ACEOF ;
+#include <math.h>
+float foo(float f) { return $ac_func (f); }
+int main (void) { return 0; }
+_ACEOF
+	
+#	c_try_link($msg, $code, $ok_val, $cflags, $exec_out_ref, $ld_flags) ;
+	my $ac_has_function = c_try_link($ac_func, "checking for $ac_func", $code, $ac_func, '-Wall -Werror', undef, '-lm') ;
+	return $ac_has_function ;
+}
+
+##-------------------------------------------------------------------------------------------
+sub c_replace_math_function
+{
+	my ($ac_func) = @_ ;
+
+	my $code = <<_ACEOF ;
+#include <math.h>
+
+static inline long int $ac_func(float x)
+{
+    return (int)(x);
+}
+
+float foo(float f) { return $ac_func (f); }
+int main (void) { return 0; }
+_ACEOF
+	
+#	c_try_link($msg, $code, $ok_val, $cflags, $exec_out_ref, $ld_flags) ;
+	my $ac_hasnt_function = c_try_link($ac_func, "", $code, $ac_func, '-Wall -Werror', undef, '-lm') ;
+	return $ac_hasnt_function ;
 }
 
 
@@ -735,9 +1017,11 @@ if (sizeof (ac__type_new_))
 }
 _ACEOF
 	
-	my $ac_struct_timeval = c_try("checking for struct timeval", $code, 1) ;
+	my $ac_struct_timeval = c_try('struct tmeval', "checking for struct timeval", $code, 1) ;
 	return $ac_struct_timeval ;
 }
+
+
 
 
 
@@ -797,73 +1081,60 @@ sub check_new_version
 	
 }
 
-##-------------------------------------------------------------------------------------------
-sub have_h
-{
-	my ($key, $header, $name, $val, $notval) = @_ ;
-	
-	$val = "1" unless defined($val) ;
-	$notval = "" unless defined($notval) ;
-
-	my $def ;
-	if ($key && exists($Config{$key}))
-	{
-		$def = $Config{$key} ;	
-	}
-	
-	if (!$def)
-	{
-		my $has = c_has_header($header) ;
-		if ($has)
-		{
-			$def = 'define' ;
-		}
-	}
-	if (!$def)
-	{
-		$def = 'undef' ;
-	}
-	
-	my $str = "#$def $name " . ($def eq 'define' ? $val : $notval) ;
-	return $str ;
-}
-
-
 
 ##-------------------------------------------------------------------------------------------
-sub have_d
+sub check_largefile
 {
-	my ($key, $name, $val, $notval) = @_ ;
-	
-	$val = "1" unless defined($val) ;
-	$notval = "" unless defined($notval) ;
+	my $code = <<_ACEOF ;
+#include <unistd.h>
 
-	my $def = $Config{$key} || 'undef' ;
-	my $str = "#$def $name " . ($def eq 'define' ? $val : $notval) ;
-	return $str ;
-}
-
-##-------------------------------------------------------------------------------------------
-# Define if not available - otherwise don't define
-sub havent_d
+int
+main ()
 {
-	my ($key, $name, $val) = @_ ;
-	
-	$val = "" unless defined($val) ;
+off64_t i = 0 ;
 
-	my $str ;
-	if ($Config{$key} eq 'define')
-	{
-		$str = "/* #define $name $val */"
-	}
-	else
-	{
-		$str = "#define $name $val"
-	}
-	return $str ;
+  return 0;
 }
+_ACEOF
+	
+	$ModuleInfo{'config'}{'off64_t'} = "" ;
+	my $ac_off64_t = c_try('off64_t', "checking for off64_t support", $code, 1) ;
+	if (!$ac_off64_t)
+	{
+		$ModuleInfo{'config'}{'off64_t'} = "#define off64_t off_t" ;
+	}
+	
 
+	$code = <<_ACEOF ;
+#include <unistd.h>
+#include <stdio.h>
+#include <fcntl.h>
 
+$ModuleInfo{'config'}{'off64_t'}
+
+int
+main ()
+{
+int fd = open("tmp.txt", O_RDONLY) ;
+off64_t size ;
+
+	size = lseek64(fd, -1, SEEK_END);
+	printf("size=%lld", (long long int)size) ;
+
+  return 0;
+}
+_ACEOF
+	
+	$ModuleInfo{'config'}{'lseek64'} = "" ;
+
+#	c_try_link($msg, $code, $ok_val, $cflags, $exec_out_ref, $ld_flags) ;
+	my $ac_lseek64 = c_try_link('lseek64', "checking for lseek64", $code, 1) ;
+	if (!$ac_lseek64)
+	{
+		$ModuleInfo{'config'}{'lseek64'} = "#define lseek64 lseek" ;
+	}
+
+}
 
 
 ##-------------------------------------------------------------------------------------------
@@ -894,8 +1165,52 @@ sub have_h
 	}
 	
 	my $str = "#$def $name " . ($def eq 'define' ? $val : $notval) ;
+	$ModuleInfo{'config'}{$name} = $str ;
+
 	return $str ;
 }
+
+
+
+##-------------------------------------------------------------------------------------------
+sub have_d
+{
+	my ($key, $name, $val, $notval) = @_ ;
+	
+	$val = "1" unless defined($val) ;
+	$notval = "" unless defined($notval) ;
+
+	my $def = $Config{$key} || 'undef' ;
+	my $str = "#$def $name " . ($def eq 'define' ? $val : $notval) ;
+	$ModuleInfo{'config'}{$name} = $str ;
+
+	return $str ;
+}
+
+##-------------------------------------------------------------------------------------------
+# Define if not available - otherwise don't define
+sub havent_d
+{
+	my ($key, $name, $val) = @_ ;
+	
+	$val = "" unless defined($val) ;
+
+	my $str ;
+	if ($Config{$key} eq 'define')
+	{
+		$str = "/* #define $name $val */"
+	}
+	else
+	{
+		$str = "#define $name $val"
+	}
+	$ModuleInfo{'config'}{$name} = $str ;
+
+	return $str ;
+}
+
+
+
 
 ##-------------------------------------------------------------------------------------------
 sub have_func
@@ -925,23 +1240,59 @@ sub have_func
 	}
 	
 	my $str = "#$def $name " . ($def eq 'define' ? $val : $notval) ;
+	$ModuleInfo{'config'}{$name} = $str ;
+
+	return $str ;
+}
+
+##-------------------------------------------------------------------------------------------
+sub have_mathfunc
+{
+	my ($key, $func, $name, $val, $notval) = @_ ;
+	
+	$val = "1" unless defined($val) ;
+	$notval = "" unless defined($notval) ;
+
+	my $def ;
+	if (!$def)
+	{
+		my $has = c_has_math_function($func) ;
+		if ($has)
+		{
+			$def = 'define' ;
+		}
+		else
+		{
+			# extra check to ensure it's not a false negative(?)
+			my $hasnt = c_replace_math_function($func) ;
+			if (!$hasnt)
+			{
+				# Failed, so we have really got it?
+				$def = 'define' ;
+				$ModuleInfo{'COMMENTS'}{$name} = 'failed check of replacement' ;
+			}
+		}
+	}
+	if (!$def)
+	{
+		$def = 'undef' ;
+	}
+	
+	my $str = "#$def $name " . ($def eq 'define' ? $val : $notval) ;
+	$ModuleInfo{'config'}{$name} = $str ;
+
 	return $str ;
 }
 
 
-
 ##-------------------------------------------------------------------------------------------
-sub arch_name
+sub _chk_arch_name
 {
-	my $arch = "ARCH_X86" ;
+	my ($arch_name) = @_ ;
 
-	my $arch_name = $Config{'archname'} ;
-	
-	if ($arch_name =~ /i.86\-.*|k.\-.*|x86_64\-.*|x86\-.*|amd64\-.*|x86/i)
-	{
-		$arch = "ARCH_X86" ;
-	}
-	elsif ($arch_name =~ /ppc\-.*|powerpc\-.*/i)
+	my $arch = "" ;
+
+	if ($arch_name =~ /ppc\-.*|powerpc\-.*/i)
 	{
 		$arch = "ARCH_PPC" ;
 		
@@ -959,50 +1310,80 @@ sub arch_name
 	{
 		$arch = "ARCH_ARM" ;
 	}
+	elsif ($arch_name =~ /i.86\-.*|k.\-.*|x86_64\-.*|x86\-.*|amd64\-.*|x86/i)
+	{
+		$arch = "ARCH_X86" ;
+	}
 
+	# keep trying with slightly relaxed regexps
+	elsif ($arch_name =~ /ppc.*|powerpc.*/i)
+	{
+		$arch = "ARCH_PPC" ;
+		
+		# altivec?
+	}
+	elsif ($arch_name =~ /sparc*|sparc64.*/i)
+	{
+		$arch = "ARCH_SPARC" ;
+	}
+	elsif ($arch_name =~ /i.86.*|x86_64.*|x86.*|amd64.*|x86/i)
+	{
+		$arch = "ARCH_X86" ;
+	}
+	
 	return $arch ;
 }
 
 ##-------------------------------------------------------------------------------------------
-sub get_config
+sub arch_name
 {
-	my %current_config ;
-	
-	# Arch
-	$current_config{'ARCH'} = arch_name() ;
-	
-	# Alignment
-	$current_config{'ALIGN_BYTES'} = $Config{'alignbytes'} * 8 ;
-	
-	# Have ...
-	$current_config{'HAVE_FTIME'} = have_func('d_ftime', 'ftime', 'HAVE_FTIME') ;
-	$current_config{'HAVE_GETTIMEOFDAY'} = have_func('d_gettimeod', 'gettimeofday', 'HAVE_GETTIMEOFDAY') ;
+	my $arch = "" ;
+	$ModuleInfo{'COMMENTS'}{'ARCH'} = "" ;
 
-	$current_config{'HAVE_INTTYPES_H'} = have_h('i_inttypes', 'inttypes.h', 'HAVE_INTTYPES_H') ;
-	$current_config{'HAVE_IO_H'} = have_h('', 'io.h', 'HAVE_IO_H') ;
-	$current_config{'HAVE_MEMORY_H'} = have_h('i_memory', 'memory.h', 'HAVE_MEMORY_H') ;
-	$current_config{'HAVE_STDINT_H'} = have_h('', 'stdint.h', 'HAVE_STDINT_H') ;
-	$current_config{'HAVE_STDLIB_H'} = have_h('i_stdlib', 'stdlib.h', 'HAVE_STDLIB_H') ;
-	$current_config{'HAVE_STRINGS_H'} = have_h('', 'strings.h', 'HAVE_STRINGS_H') ; 
-	$current_config{'HAVE_STRING_H'} = have_h('i_string', 'string.h', 'HAVE_STRING_H') ;
-	$current_config{'HAVE_SYS_STAT_H'} = have_h('i_sysstat', 'sys/stat.h', 'HAVE_SYS_STAT_H') ;
-	$current_config{'HAVE_SYS_TIMEB_H'} = have_h('', 'sys/timeb.h', 'HAVE_SYS_TIMEB_H') ; 
-	$current_config{'HAVE_SYS_TIME_H'} = have_h('i_systime', 'sys/time.h', 'HAVE_SYS_TIME_H') ;
-	$current_config{'HAVE_SYS_TYPES_H'} = have_h('i_systypes', 'sys/types.h', 'HAVE_SYS_TYPES_H') ;
-	$current_config{'HAVE_TIME_H'} = have_h('i_time', 'time.h', 'HAVE_TIME_H') ;
-	$current_config{'HAVE_UNISTD_H'} = have_h('i_unistd', 'unistd.h', 'HAVE_UNISTD_H') ;
-	$current_config{'HAVE_GETOPT_H'} = have_h('', 'getopt.h', 'HAVE_GETOPT_H') ;
+	## use %Config first
+	my $arch_name = $Config{'archname'} ;
+	$arch = _chk_arch_name($arch_name) ;
+	$ModuleInfo{'COMMENTS'}{'ARCH'} = "archname = $arch_name" ;
 	
+	if (!$arch)
+	{
+		## Failed, so attempt to run uname
+		if ($^O ne 'MSWin32')
+		{
+			$arch_name = `uname -a` ;
+			chomp $arch_name ;
+			$arch = _chk_arch_name($arch_name) ;
+			$ModuleInfo{'COMMENTS'}{'ARCH'} = "uname = $arch_name" ;
+		}
+	}
+
+	## Catch-all if everything else has failed...
+	if (!$arch)
+	{
+		$arch = "ARCH_X86" ;
+		$ModuleInfo{'COMMENTS'}{'ARCH'} ||= "Unable to determine" ;
+	}
+
+	$ModuleInfo{'config'}{'ARCH'} = $arch ;
 	
-	# TODO: convert to live checks....
-	$current_config{'USE_LARGEFILES'} = have_d('uselargefiles', '_LARGE_FILES') ;
-	$current_config{'const'} = havent_d('d_const', 'const') ;
-	$current_config{'size_t'} = $Config{'sizetype'} eq 'size_t' ? "" : "#define size_t unsigned int" ;
-	$current_config{'volatile'} = havent_d('d_volatile', 'CONST') ;
-	
-	
-	
-	# Endian 
+	return $arch ;
+}
+
+##-------------------------------------------------------------------------------------------
+sub get_align
+{
+	$ModuleInfo{'config'}{'ALIGN_BYTES'} = $Config{'alignbytes'} * 8 ;
+}
+
+##-------------------------------------------------------------------------------------------
+sub get_size_t
+{
+	$ModuleInfo{'config'}{'size_t'} = $Config{'sizetype'} eq 'size_t' ? "" : "#define size_t unsigned int" ;
+}
+
+##-------------------------------------------------------------------------------------------
+sub get_endian
+{
 	my $ENDIAN = "
 #undef WORDS_BIGENDIAN
 #undef SHORT_BIGENDIAN
@@ -1055,7 +1436,53 @@ sub get_config
 " ;
 		}
 	}
-	$current_config{'ENDIAN'} = $ENDIAN ;
+	$ModuleInfo{'config'}{'ENDIAN'} = $ENDIAN ;
+}
+
+
+##-------------------------------------------------------------------------------------------
+sub get_config
+{
+	$ModuleInfo{'config'} = {} ;
+	
+	# Arch
+	arch_name() ;
+
+	# OS
+	$ModuleInfo{'config'}{'OS'} = uc("OS_" . $^O) ;
+
+	# Alignment
+	get_align() ;
+	
+	# Have ...
+	have_func('d_ftime', 'ftime', 'HAVE_FTIME') ;
+	have_func('d_gettimeod', 'gettimeofday', 'HAVE_GETTIMEOFDAY') ;
+	have_mathfunc('', 'lrintf', 'HAVE_LRINTF') ;
+
+	have_h('i_inttypes', 'inttypes.h', 'HAVE_INTTYPES_H') ;
+	have_h('', 'io.h', 'HAVE_IO_H') ;
+	have_h('i_memory', 'memory.h', 'HAVE_MEMORY_H') ;
+	have_h('', 'stdint.h', 'HAVE_STDINT_H') ;
+	have_h('i_stdlib', 'stdlib.h', 'HAVE_STDLIB_H') ;
+	have_h('', 'strings.h', 'HAVE_STRINGS_H') ; 
+	have_h('i_string', 'string.h', 'HAVE_STRING_H') ;
+	have_h('i_sysstat', 'sys/stat.h', 'HAVE_SYS_STAT_H') ;
+	have_h('', 'sys/timeb.h', 'HAVE_SYS_TIMEB_H') ; 
+	have_h('i_systime', 'sys/time.h', 'HAVE_SYS_TIME_H') ;
+	have_h('i_systypes', 'sys/types.h', 'HAVE_SYS_TYPES_H') ;
+	have_h('i_time', 'time.h', 'HAVE_TIME_H') ;
+	have_h('i_unistd', 'unistd.h', 'HAVE_UNISTD_H') ;
+	have_h('', 'getopt.h', 'HAVE_GETOPT_H') ;
+	
+	
+	# TODO: convert to live checks....
+	have_d('uselargefiles', '_LARGE_FILES') ;
+	havent_d('d_const', 'const') ;
+	get_size_t() ;
+	havent_d('d_volatile', 'volatile') ;
+	
+	# Endian 
+	get_endian() ;
 	
 	# inline ?
 	my $ac_c_inline = c_inline() ;
@@ -1063,33 +1490,82 @@ sub get_config
 	my $inline = $ac_c_always_inline || $ac_c_inline || "" ;
 	if ($inline eq 'inline')
 	{
-		$current_config{'inline'} = "" ;
+		$ModuleInfo{'config'}{'inline'} = "" ;
 	}
 	else
 	{
-		$current_config{'inline'} = "#define inline $inline" ;
+		$ModuleInfo{'config'}{'inline'} = "#define inline $inline" ;
 	}
 	
 	# restrict ?
-	$current_config{'restrict'} = c_restrict() ;
+	$ModuleInfo{'config'}{'restrict'} = c_restrict() ;
 	
 
 	# timeval
 	my $ac_struct_timeval = c_struct_timeval() ;
-	$current_config{'HAVE_STRUCT_TIMEVAL'} = $ac_struct_timeval ? "#define HAVE_STRUCT_TIMEVAL 1" : "#undef HAVE_STRUCT_TIMEVAL" ;
+	$ModuleInfo{'config'}{'HAVE_STRUCT_TIMEVAL'} = $ac_struct_timeval ? "#define HAVE_STRUCT_TIMEVAL 1" : "#undef HAVE_STRUCT_TIMEVAL" ;
 	
 	# signal_t
-	$current_config{'RETSIGTYPE'} = $Config{'signal_t'} ? "#define RETSIGTYPE $Config{'signal_t'}" : "#define RETSIGTYPE void" ;
+	$ModuleInfo{'config'}{'RETSIGTYPE'} = $Config{'signal_t'} ? "#define RETSIGTYPE $Config{'signal_t'}" : "#define RETSIGTYPE void" ;
 
 	# Builtin...
-	$current_config{'HAVE_BUILTIN_EXPECT'} = have_builtin_expect() ; 
-	$current_config{'HAVE_LRINTF'} = have_lrintf() ;
+	$ModuleInfo{'config'}{'HAVE_BUILTIN_EXPECT'} = have_builtin_expect() ; 
 
-	## save
-	$ModuleInfo{'config'} = \%current_config ;
+	# Large file support
+	check_largefile() ;
 
-	return %current_config ;
+	return %{$ModuleInfo{'config'}} ;
 }
+
+#-----------------------------------------------------------------------------------------------------------------------
+sub get_makemakerdflt 
+{
+	my $make =<<MAKEMAKERDFLT;
+
+## Show config
+makemakerdflt : showconfig all
+	\$(NOECHO) \$(NOOP)
+
+showconfig : FORCE 
+	\$(NOECHO) \$(ECHO) "=================================================================="
+	\$(NOECHO) \$(ECHO) "== CONFIG                                                       =="
+	\$(NOECHO) \$(ECHO) "=================================================================="
+	\$(NOECHO) \$(ECHO) "(Makeutils.pm version $VERSION)"
+MAKEMAKERDFLT
+
+	foreach my $var (sort keys %{$ModuleInfo{'config'}})
+	{
+		my $padded = sprintf "%-24s", "$var:" ;
+		my $val = $ModuleInfo{'config'}{$var} ;
+		
+		## Special cases
+		
+		# ENDIAN is multi-line
+		if ($var eq 'ENDIAN')
+		{
+			if ($val =~ m/#define (\w+)/)
+			{
+				$val = "#define $1 1" ;
+			}
+			else
+			{
+				$val = "" ;
+			}
+		}
+		
+		# Check for comment
+#		if (exists($ModuleInfo{'COMMENTS'}{$var}))
+#		{
+#			$val .= "  ($ModuleInfo{'COMMENTS'}{$var})" ;
+#		}
+		$make .= "\t\$(NOECHO) \$(ECHO) \"$padded $val\"\n" ;
+	}
+	$make .= "\t\$(NOECHO) \$(ECHO) \"==================================================================\"\n" ;
+	$make .= "\t\$(NOECHO) \$(ECHO) \"==\" \n" ;
+
+	return $make ;
+}
+
 
 
 
@@ -1100,4 +1576,352 @@ sub get_config
 1;
 
 __END__
+
+
+  { echo "$as_me:$LINENO: checking for special C compiler options needed for large files" >&5
+echo $ECHO_N "checking for special C compiler options needed for large files... $ECHO_C" >&6; }
+if test "${ac_cv_sys_largefile_CC+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  ac_cv_sys_largefile_CC=no
+     if test "$GCC" != yes; then
+       ac_save_CC=$CC
+       while :; do
+	 # IRIX 6.2 and later do not support large files by default,
+	 # so use the C compiler's -n32 option if that helps.
+	 cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <sys/types.h>
+ /* Check that off_t can represent 2**63 - 1 correctly.
+    We can't simply define LARGE_OFF_T to be 9223372036854775807,
+    since some C++ compilers masquerading as C compilers
+    incorrectly reject 9223372036854775807.  */
+#define LARGE_OFF_T (((off_t) 1 << 62) - 1 + ((off_t) 1 << 62))
+  int off_t_is_large[(LARGE_OFF_T % 2147483629 == 721
+		       && LARGE_OFF_T % 2147483647 == 1)
+		      ? 1 : -1];
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+	 rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest.$ac_objext; then
+  break
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext
+	 CC="$CC -n32"
+	 rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest.$ac_objext; then
+  ac_cv_sys_largefile_CC=' -n32'; break
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext
+	 break
+       done
+       CC=$ac_save_CC
+       rm -f conftest.$ac_ext
+    fi
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_sys_largefile_CC" >&5
+echo "${ECHO_T}$ac_cv_sys_largefile_CC" >&6; }
+  if test "$ac_cv_sys_largefile_CC" != no; then
+    CC=$CC$ac_cv_sys_largefile_CC
+  fi
+
+
+
+
+
+  { echo "$as_me:$LINENO: checking for _FILE_OFFSET_BITS value needed for large files" >&5
+echo $ECHO_N "checking for _FILE_OFFSET_BITS value needed for large files... $ECHO_C" >&6; }
+if test "${ac_cv_sys_file_offset_bits+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  while :; do
+  cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <sys/types.h>
+ /* Check that off_t can represent 2**63 - 1 correctly.
+    We can't simply define LARGE_OFF_T to be 9223372036854775807,
+    since some C++ compilers masquerading as C compilers
+    incorrectly reject 9223372036854775807.  */
+#define LARGE_OFF_T (((off_t) 1 << 62) - 1 + ((off_t) 1 << 62))
+  int off_t_is_large[(LARGE_OFF_T % 2147483629 == 721
+		       && LARGE_OFF_T % 2147483647 == 1)
+		      ? 1 : -1];
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest.$ac_objext; then
+  ac_cv_sys_file_offset_bits=no; break
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#define _FILE_OFFSET_BITS 64
+#include <sys/types.h>
+ /* Check that off_t can represent 2**63 - 1 correctly.
+    We can't simply define LARGE_OFF_T to be 9223372036854775807,
+    since some C++ compilers masquerading as C compilers
+    incorrectly reject 9223372036854775807.  */
+#define LARGE_OFF_T (((off_t) 1 << 62) - 1 + ((off_t) 1 << 62))
+  int off_t_is_large[(LARGE_OFF_T % 2147483629 == 721
+		       && LARGE_OFF_T % 2147483647 == 1)
+		      ? 1 : -1];
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest.$ac_objext; then
+  ac_cv_sys_file_offset_bits=64; break
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  ac_cv_sys_file_offset_bits=unknown
+  break
+done
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_sys_file_offset_bits" >&5
+echo "${ECHO_T}$ac_cv_sys_file_offset_bits" >&6; }
+case $ac_cv_sys_file_offset_bits in #(
+  no | unknown) ;;
+  *)
+cat >>confdefs.h <<_ACEOF
+#define _FILE_OFFSET_BITS $ac_cv_sys_file_offset_bits
+_ACEOF
+;;
+esac
+rm -f conftest*
+  if test $ac_cv_sys_file_offset_bits = unknown; then
+    { echo "$as_me:$LINENO: checking for _LARGE_FILES value needed for large files" >&5
+echo $ECHO_N "checking for _LARGE_FILES value needed for large files... $ECHO_C" >&6; }
+if test "${ac_cv_sys_large_files+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  while :; do
+  cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <sys/types.h>
+ /* Check that off_t can represent 2**63 - 1 correctly.
+    We can't simply define LARGE_OFF_T to be 9223372036854775807,
+    since some C++ compilers masquerading as C compilers
+    incorrectly reject 9223372036854775807.  */
+#define LARGE_OFF_T (((off_t) 1 << 62) - 1 + ((off_t) 1 << 62))
+  int off_t_is_large[(LARGE_OFF_T % 2147483629 == 721
+		       && LARGE_OFF_T % 2147483647 == 1)
+		      ? 1 : -1];
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest.$ac_objext; then
+  ac_cv_sys_large_files=no; break
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#define _LARGE_FILES 1
+#include <sys/types.h>
+ /* Check that off_t can represent 2**63 - 1 correctly.
+    We can't simply define LARGE_OFF_T to be 9223372036854775807,
+    since some C++ compilers masquerading as C compilers
+    incorrectly reject 9223372036854775807.  */
+#define LARGE_OFF_T (((off_t) 1 << 62) - 1 + ((off_t) 1 << 62))
+  int off_t_is_large[(LARGE_OFF_T % 2147483629 == 721
+		       && LARGE_OFF_T % 2147483647 == 1)
+		      ? 1 : -1];
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest.$ac_objext; then
+  ac_cv_sys_large_files=1; break
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  ac_cv_sys_large_files=unknown
+  break
+done
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_sys_large_files" >&5
+echo "${ECHO_T}$ac_cv_sys_large_files" >&6; }
+case $ac_cv_sys_large_files in #(
+  no | unknown) ;;
+  *)
+cat >>confdefs.h <<_ACEOF
+#define _LARGE_FILES $ac_cv_sys_large_files
+_ACEOF
+;;
+esac
+rm -f conftest*
+  fi
+fi
 

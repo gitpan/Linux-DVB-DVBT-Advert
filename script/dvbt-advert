@@ -10,15 +10,22 @@ use Data::Dumper ;
 ++$! ;
 
 use Linux::DVB::DVBT::Advert ;
+use Linux::DVB::DVBT::Advert::Mem ;
 
 our $VERSION = "1.01" ;
 
 	my $process_state = "" ;
 	
+	my $XS_MEM ;
+	my $MEMPROF ;
+	my $FRAME_BUFF ;
 	my ($help, $man, $DEBUG, $VERBOSE, $dbg_logo, $dbg_frame, $dbg_audio, $dbg_ts) ;
 	my ($cutfile, $det, $use_file, $adv, $mode, $expected, $config, $channel, $cutmode, $write_cfg) ;
 	GetOptions('v|verbose=s' => \$VERBOSE,
 			   'debug=i' => \$DEBUG,
+			   'MEM=i' => \$XS_MEM,
+			   'MEMPROF' => \$MEMPROF,
+			   'FRAME_BUFF=i' => \$FRAME_BUFF,
 			   'dbg-logo=i' => \$dbg_logo,
 			   'dbg-frame=i' => \$dbg_frame,
 			   'dbg-audio=i' => \$dbg_audio,
@@ -33,13 +40,16 @@ our $VERSION = "1.01" ;
 			   'mode=i' => \$mode,
 			   'exp|expected=s' => \$expected,
 			   'cutfile=s' => \$cutfile,
-			   'cutmode' => \$cutmode,
+			   'cutmode=s' => \$cutmode,
 			   'wrcfg' => \$write_cfg,
 			   ) or pod2usage(2) ;
 
 print "Linux::DVB::DVBT::Advert version $Linux::DVB::DVBT::Advert::VERSION\n" ;
 
 	$Linux::DVB::DVBT::Advert::DEBUG = $DEBUG ;
+	$Linux::DVB::DVBT::Advert::USE_XS_MEM = $XS_MEM if defined($XS_MEM) ;
+	$Linux::DVB::DVBT::Advert::FRAME_BUFF = $FRAME_BUFF if defined($FRAME_BUFF) ;
+	$Linux::DVB::DVBT::Advert::Mem::MEM_PROFILE = $MEMPROF if defined($MEMPROF) ;
 	
     pod2usage(1) if $help;
     pod2usage(-verbose => 2) if $man;
@@ -91,7 +101,7 @@ print "Linux::DVB::DVBT::Advert version $Linux::DVB::DVBT::Advert::VERSION\n" ;
 		print "Detection...\n" ;
 		# detect($src, $settings_href, $channel, $ad_config_href, $detect)
 		$results_href = Linux::DVB::DVBT::Advert::detect($file, $settings_href, $channel, $ad_config_href, $det) ;
-		print STDERR "\n" ;
+		print "\n" ;
 	}
 	
 	my $results_settings_href = $results_href->{'settings'} || {} ;
@@ -103,7 +113,7 @@ print Data::Dumper->Dump(["Results settings:", $results_settings_href]) if $DEBU
 	
 	## Read in expected results
 	my $expected_aref ;
-	if ($expected)
+	if ($expected && -f $expected)
 	{
 		my @expected = Linux::DVB::DVBT::Advert::read_expected($expected) ;
 		$expected_aref = \@expected ;
@@ -112,7 +122,7 @@ print Data::Dumper->Dump(["Results settings:", $results_settings_href]) if $DEBU
 	## Analyse
 	print "Analyse...\n" ;
 	my @cut_list = Linux::DVB::DVBT::Advert::analyse($file, $results_href, $ad_config_href, $channel, $adv, $expected_aref, $settings_href) ;
-	
+
 	# free up memory
 	$results_href = {} ;
 	$settings_href = {} ;
@@ -136,19 +146,23 @@ print Data::Dumper->Dump(["Results settings:", $results_settings_href]) if $DEBU
 	## Cut
 	if ($cutfile && $file)
 	{
+		my $err ;
 		if ($cutmode eq "cut")
 		{
 			# cut
-			print "Cut...\n" ;
-			Linux::DVB::DVBT::Advert::ad_cut($file, $cutfile, \@cut_list) ;
+			print "Cut \"$file\" to \"$cutfile\"...\n" ;
+			$err = Linux::DVB::DVBT::Advert::ad_cut($file, $cutfile, \@cut_list) ;
 		}
 		else
 		{
 			# split 
-			print "Split...\n" ;
-			Linux::DVB::DVBT::Advert::ad_split($file, $cutfile, \@cut_list) ;
+			print "Split \"$file\" to \"$cutfile\"...\n" ;
+			$err = Linux::DVB::DVBT::Advert::ad_split($file, $cutfile, \@cut_list) ;
 		}
+		
+		print "Error: $err\n" if $err ;
 	}
+
 	
 	exit 0 ;
 	
@@ -174,6 +188,7 @@ sub progress
 		print STDERR $state_str ;
 		$process_state = $state_str ;
 	}
+
 	
 	printf STDERR "%3d%%\b\b\b\b", $progress*100/$total ;
 }
@@ -199,18 +214,17 @@ Options:
        -verbose level       set verbosity level
        -help                brief help message
        -man                 full documentation
-       -save                save detection file
        -wrcfg               overwrite advert config file
        -cfg <config>        use specified DVBT config file
        -chan <chan>         specify channel (to determine settings)
-       -det <detfile>       save detection results to file
-       -file <detfile>      read detection results from file
-       -adv <advfile>       save analysis to file
-       -mode <mode>         set detection mode
+       -det <detfile>       save detection results to file (.det)
+       -file <detfile>      read detection results from file (.det)
+       -adv <advfile>       save analysis to file (.adv)
+       -mode <mode>         set detection mode 
        -exp <expected>      read expected cut list
        -cutfile <cutfile>   set filename for cut file
        -cutmode <mode>      set cut mode to 'cut' or 'split'
-       
+
 =head1 OPTIONS
 
 =over 8

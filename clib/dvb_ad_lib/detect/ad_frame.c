@@ -8,13 +8,39 @@
 #include "ts_advert.h"
 
 
+//===========================================================================================================================
+// CONSTANTS
+//===========================================================================================================================
+
+// Audio default Perl settings
+#define FRAME_max_advert			(3*60*FPS)
+#define FRAME_min_advert			(3*60*FPS)
+#define FRAME_min_program			(5*60*FPS)
+#define FRAME_start_pad				(2*60*FPS)
+#define FRAME_end_pad				(2*60*FPS)
+#define FRAME_min_frames 	 		2
+#define FRAME_frame_window 	 		(4*60*FPS)
+#define FRAME_max_gap 		 		(10*FPS)
+#define FRAME_reduce_end			0
+#define FRAME_reduce_min_gap	 	0
+
+//#define DEBUG_STATE
+
+//===========================================================================================================================
+// MACROS
+//===========================================================================================================================
+
+
 // print debug if debug setting is high enough
 #define frame_dbg_prt(LVL, ARGS)	\
 		if (frame_settings->debug >= LVL)	printf ARGS
 
 
+//===========================================================================================================================
+// FUNCTIONS
+//===========================================================================================================================
 
-//#define DEBUG_STATE
+
 
 //---------------------------------------------------------------------------------------------------------------------------
 #ifdef DEBUG_STATE
@@ -581,6 +607,20 @@ void frame_init_settings(struct Ad_frame_settings *settings)
 	settings->remove_logo = 0 ;
 	frame_set_logo_area(settings, 0, 0,0, 0,0) ;
 
+	// Perl settings
+	// set_perl_settings(settings, mx_ad, mn_ad, mn_pr, s_pd, e_pd, mn_fr, fr_wn, mx_gp, r_en, r_mn_gp)
+	set_perl_settings(settings,
+		FRAME_max_advert,
+		FRAME_min_advert,
+		FRAME_min_program,
+		FRAME_start_pad,
+		FRAME_end_pad,
+		FRAME_min_frames,
+		FRAME_frame_window,
+		FRAME_max_gap,
+		FRAME_reduce_end,
+		FRAME_reduce_min_gap
+	) ;
 
 }
 

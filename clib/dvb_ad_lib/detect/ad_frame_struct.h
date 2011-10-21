@@ -6,6 +6,8 @@
 #ifndef AD_FRAME_STRUCT_H_
 #define AD_FRAME_STRUCT_H_
 
+#include "ad_perl_struct.h"
+
 // black frame detect
 #define MAX_BLACK		0x30
 #define WINDOW_PERCENT	95
@@ -44,6 +46,8 @@ struct Ad_frame_settings {
 	unsigned	logo_x1 ;
 	unsigned	logo_y2 ;		// bottom right
 	unsigned	logo_x2 ;
+
+	struct Ad_perl_settings perl_set ;
 
 } ;
 

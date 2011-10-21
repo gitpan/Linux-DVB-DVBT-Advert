@@ -7,8 +7,10 @@ use Test::More tests => 3;
 
 ## Check module loads ok
 use Linux::DVB::DVBT::Advert qw/:all/ ;
-#use Linux::DVB::DVBT::Advert::Config ;
+use Linux::DVB::DVBT::Advert::Config ;
 #use Linux::DVB::DVBT::Advert::Constants ;
+
+$Linux::DVB::DVBT::Advert::Config::DEBUG =1;
 
 my %expected_def = (
           $Linux::DVB::DVBT::Advert::Config::ADVERT_GLOBAL_SECTION => {}
@@ -76,6 +78,54 @@ my %expected_full = (
                                                         }
 ) ;
 
+
+my $perl_set = {
+#		'max_advert'			=> 3*60*$FPS,	# maximum length of a single advert
+#		'min_advert'			=> 3*60*$FPS,	# minimum length of advert period (cut period) excludes prog change
+#		'min_program'			=> 5*60*$FPS,
+#		'start_pad'				=> 2*60*$FPS,
+#		'end_pad'				=> 2*60*$FPS,
+#		'min_frames' 	=> 2,
+#		'frame_window' 	=> 4,
+#		'max_gap' 		=> 10,
+	'frame' => {
+                       'end_pad' => 3000,
+                       'reduce_end' => 0,
+                       'start_pad' => 3000,
+                       'reduce_min_gap' => 0,
+                },
+
+#		'max_advert'			=> 3*60*$FPS,	# maximum length of a single advert
+#		'min_advert'			=> 3*60*$FPS,	# minimum length of advert period (cut period) excludes prog change
+#		'min_program'			=> 5*60*$FPS,
+#		'start_pad'				=> 2*60*$FPS,
+#		'end_pad'				=> 2*60*$FPS,
+#		'min_frames' 	=> $FPS,
+#		'frame_window' 	=> 20,
+#		'max_gap' 		=> 10*$FPS,
+	'logo' => {
+                       'end_pad' => 3000,
+                       'reduce_end' => 0,
+                       'start_pad' => 3000,
+                       'reduce_min_gap' => 250,
+                },
+
+#		'max_advert'			=> 4*60*$FPS,	# maximum length of a single advert
+#		'min_advert'			=> 2*60*$FPS,	# minimum length of advert period (cut period) excludes prog change
+#		'min_program'			=> 5*60*$FPS,
+#		'start_pad'				=> 2*60*$FPS,
+#		'end_pad'				=> 2*60*$FPS,
+#		'min_frames' 	=> 2,
+#		'frame_window' 	=> 4*60*$FPS,
+#		'max_gap' 		=> 10*$FPS,
+	'audio' => {
+                       'end_pad' => 3000,
+                       'reduce_end' => 0,
+                       'start_pad' => 3000,
+                       'reduce_min_gap' => 0,
+                },
+}; 
+
 ## Check config read
 my $ad_config_href ;
 
@@ -103,14 +153,24 @@ my %expected_chan = (
 	'pid' => -1,
 
 	# not used
-	'increase_start' => 0,
-	'increase_min_gap' => 1500,
+#	'increase_start' => 0,
+#	'increase_min_gap' => 1500,
 	) ;
 	
 $expected_chan{'frame'}{'remove_logo'} = 0 ;
 $expected_chan{'audio'}{'silence_threshold'} = -80 ;
 $expected_chan{'audio'}{'scale'} = 1 ;
 $expected_chan{'logo'}{'logo_window'} = 50 ;
+
+foreach my $region (qw/frame logo audio/)
+{
+	foreach my $key (keys %{$perl_set->{$region}})
+	{
+		$expected_chan{$region}{$key} = $perl_set->{$region}{$key} ;
+	}
+}
+print Data::Dumper->Dump(['Chan expected', \%expected_chan]) ;
+
 
 my $chan_href = channel_settings({}, 'Dave', $ad_config_href) ;
 print Data::Dumper->Dump(['Chan settings', $chan_href]) ;

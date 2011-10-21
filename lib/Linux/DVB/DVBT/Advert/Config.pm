@@ -399,7 +399,7 @@ use Linux::DVB::DVBT::Advert::Constants ;
 our $VERSION = '1.03' ;
 our $DEBUG = 0 ;
 
-our $DEFAULT_CONFIG_PATH = [ qw(/etc/dvb ~/.tv) ] ;
+our $DEFAULT_CONFIG_PATH ;
 our $FILENAME = 'dvb-adv' ;
 
 my %NUMERALS = (
@@ -720,35 +720,48 @@ sub read_dvb_adv
 	$search_path ||= $DEFAULT_CONFIG_PATH ;
 	$DEFAULT_CONFIG_PATH = $search_path ;
 	
-	my %dvb_adv = (
+	my $adv_settings_href = {
 		"$ADVERT_GLOBAL_SECTION"	=> {},
-	) ;
+	} ;
 
 	## Optional file so allow for it to be not present
-	my $fname = read_filename($search_path) ;
-	if (open my $fh, "<$fname")
+	my @fnames = read_filenames($search_path) ;
+	foreach my $fname (@fnames)
 	{
-		my $line ;
-		my $channel = $ADVERT_GLOBAL_SECTION ;
-		while(defined($line=<$fh>))
+		my %dvb_adv = (
+			"$ADVERT_GLOBAL_SECTION"	=> {},
+		) ;
+		if (open my $fh, "<$fname")
 		{
-			chomp $line ;
-			next if $line =~ /^\s*#/ ; # skip comments
-			 
-			if ($line =~ /\[([^]]+)\]/)
+			my $line ;
+			my $channel = $ADVERT_GLOBAL_SECTION ;
+			while(defined($line=<$fh>))
 			{
-				$channel=$1;
-			}
-			else
-			{
-				$dvb_adv{$channel} ||= {} ;
-				parse_assignment($line, $dvb_adv{$channel}) ;
-			}
-		}	
-		close $fh ;
+				chomp $line ;
+				next if $line =~ /^\s*#/ ; # skip comments
+				 
+				if ($line =~ /\[([^]]+)\]/)
+				{
+					$channel=$1;
+				}
+				else
+				{
+					$dvb_adv{$channel} ||= {} ;
+					parse_assignment($line, $dvb_adv{$channel}) ;
+				}
+			}	
+			close $fh ;
+
+			# combine
+			$adv_settings_href = Linux::DVB::DVBT::Advert::Config::merge_settings(
+									$adv_settings_href,
+									\%dvb_adv,
+								) ;
+		}
+		
 	}
 
-	return \%dvb_adv ;
+	return $adv_settings_href ;
 }
 
 
@@ -797,24 +810,31 @@ sub write_filename
 
 #----------------------------------------------------------------------
 
-=item B<read_filename([$search_path])>
+=item B<read_filenames([$search_path])>
 
-Returns the advert config file readable filename path
+Returns an array of found file paths for all readable advert config files found in search path
 
 Optionally set the search path (see L</Config File Search Path>)
 
 =cut
 
-sub read_filename
+sub read_filenames
 {
 	my ($search_path) = @_ ;
 
 	$search_path ||= $DEFAULT_CONFIG_PATH ;
 	$DEFAULT_CONFIG_PATH = $search_path ;
 	
-	my $dir = read_dir($search_path, $FILENAME) || '.' ;
+	my @files = read_dir($search_path, $FILENAME) ;
+print "read_filenames() dirs=@files\n" if $DEBUG ;
+	foreach my $file (@files)
+	{
+		$file .= "/$FILENAME" ;
+	}
+
+print "read_filenames() = @files\n" if $DEBUG ;
 	
-	return "$dir/$FILENAME" ;
+	return @files ;
 }
 
 #----------------------------------------------------------------------
@@ -1335,6 +1355,8 @@ sub channel_settings
 	my ($advert_settings_href, $channel) = @_ ;
 	
 	$channel ||= "" ;
+	$channel =~ s/^['"](.*)['"]$/$1/ ;
+	
 print Data::Dumper->Dump(["channel_settings($channel) IN:", $advert_settings_href]) if $DEBUG >= 10 ;
 	
 	my $cascaded_href = {} ;
@@ -1459,7 +1481,7 @@ sub _lookup_comment
 
 =item B<read_dir($search_path, $fname)>
 
-Find directory to read from - first readable directory in search path
+Find directories to read from - all readable directories in search path
 
 =cut
 
@@ -1468,8 +1490,9 @@ sub read_dir
 	my ($search_path, $fname) = @_ ;
 	
 	my @dirs = _expand_search_path($search_path) ;
-	my $dir ;
+#	my $dir ;
 	
+	my @found = () ;
 	foreach my $d (@dirs)
 	{
 		my $found=1 ;
@@ -1481,14 +1504,17 @@ sub read_dir
 		
 		if ($found)
 		{
-			$dir = $d ;
-			last ;
+#			$dir = $d ;
+#			last ;
+			push @found, $d ;
 		}
 	}
 
-	print STDERR "Searched $search_path : read dir=".($dir?$dir:"")."\n" if $DEBUG ;
+	@found = ('.') unless @found ;
+	print "Searched [ @$search_path ] : read dir=@found\n" if $DEBUG ;
 		
-	return $dir ;
+#	return $dir ;
+	return @found ;
 }
 
 #----------------------------------------------------------------------

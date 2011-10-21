@@ -78,11 +78,14 @@ settings. The analyse phase output can be plotted to show the effectiveness of t
 #============================================================================================
 use strict ;
 use Env ;
+use Carp ;
 use File::Basename ;
 use File::Path ;
 
 use Linux::DVB::DVBT::Advert::Config ;
 use Linux::DVB::DVBT::Advert::Constants ;
+
+use Linux::DVB::DVBT::Advert::Mem ;
 
 use Data::Dumper ;
 
@@ -103,24 +106,36 @@ our @EXPORT = qw/
 	ok_to_detect
 / ;
 
-our @EXPORT_OK = qw/
+our @CHECK_OK = qw/
+	read_adv
+	adv_to_cutlist
+/ ;
+
+our @OK = qw/
 	ad_config_search
 	channel_settings
 	read_expected
 	write_default_config
 / ;
 
+our @EXPORT_OK = (@OK, @CHECK_OK) ;
+
 our %EXPORT_TAGS = (
-	'all'	=> [ @EXPORT, @EXPORT_OK ],
+	'all'		=> [ @EXPORT, @EXPORT_OK ],
+	'check'		=> [ @EXPORT, @CHECK_OK  ],
 ) ;
 
 #============================================================================================
 # GLOBALS
 #============================================================================================
-our $VERSION = '0.03' ;
+our $VERSION = '0.04' ;
 our $DEBUG = 0 ;
 
-our $CONFIG_DIR = $Linux::DVB::DVBT::Advert::Config::DEFAULT_CONFIG_PATH ;
+our $USE_XS_MEM = 3 ;
+
+
+#our $CONFIG_DIR = $Linux::DVB::DVBT::Advert::Config::DEFAULT_CONFIG_PATH ;
+our $CONFIG_DIR ;
 
 #============================================================================================
 # XS
@@ -137,8 +152,16 @@ else
 }
 
 #============================================================================================
+BEGIN {
+	
+	$CONFIG_DIR = $Linux::DVB::DVBT::Advert::Config::DEFAULT_CONFIG_PATH ;
+	
+}
+
+#============================================================================================
 my $FPS = $Linux::DVB::DVBT::Advert::Constants::CONSTANTS{'FRAMES_PER_SEC'} ;
 my $FRAME_FIELD	= 'frame' ;
+my $FRAME_END_FIELD	= 'frame_end' ;
 my $PROG_FIELD	= 'program' ;
 my $PACKET_FIELD	= 'start_pkt' ;
 my $PACKET_END_FIELD	= 'end_pkt' ;
@@ -289,6 +312,12 @@ sub channel_settings
 
 	## Get defaults
 	my $default_settings_href = Linux::DVB::DVBT::Advert::dvb_advert_def_settings() ;
+
+	if ($DEBUG)
+	{
+		print Data::Dumper->Dump(["config settings:", $config_settings_href]) ;
+		print Data::Dumper->Dump(["default settings:", $default_settings_href]) ;
+	}
 	
 	## Merge them all together
 	my $chan_settings_href = Linux::DVB::DVBT::Advert::Config::merge_settings(
@@ -329,17 +358,44 @@ sub detect
 {
 	my ($src, $settings_href, $channel, $ad_config_href, $detect) = @_ ;
 
+	if ($DEBUG)
+	{
+		print Data::Dumper->Dump(["===detect====", "settings:", $settings_href, "AD ($channel) config", $ad_config_href]) ;
+	}
+	
 	$channel ||= "" ;
 	my $results_href = {} ;
 
 	## Get combined settings for this channel
 	$settings_href = channel_settings($settings_href, $channel, $ad_config_href) ;
+
+	if ($DEBUG)
+	{
+		print Data::Dumper->Dump(["channel settings:", $settings_href]) ;
+	}
 							
 	## Skip if disabled
 	if (ok_to_detect($settings_href))
 	{					
+		my $adata_ref ;
+
+$settings_href->{'debug'} =0;
+		
 		## Do detection
-		$results_href = Linux::DVB::DVBT::Advert::dvb_advert_detect($src, $settings_href) ;
+		my $det_aref = Linux::DVB::DVBT::Advert::dvb_advert_detect($src, $settings_href) ;
+
+		($results_href, $adata_ref) = @$det_aref ;
+
+	if ($DEBUG)
+	{
+		print Data::Dumper->Dump(["after detect - results settings:", $results_href->{'settings'}]) ;
+	}
+		
+		# tie an array to the internal data - this is *much* more effecient than letting Perl gobble up
+		# 10x the memory
+		my @frames ;
+		tie @frames, 'Linux::DVB::DVBT::Advert', 'ADATA', [$$adata_ref] ;
+		$results_href->{'frames'} = \@frames ;
 		
 		if ($DEBUG)
 		{
@@ -371,21 +427,25 @@ sub detect
 		}
 		
 		## Save frames
-		my $frame_href = $results_href->{frames}{"0"} ;
+		my $frame_href = $results_href->{'frames'}[0] ;
 		my $line = $FRAME_FIELD ;
 		foreach my $field (sort keys %$frame_href)
 		{
 			next unless !ref($frame_href->{$field}) ;
+			next if $field eq $FRAME_FIELD ;
 			$line .= ",$field" ;
 		}
 		print $fh "$line\n" ;
-		for (my $frame=0; $frame < $results_href->{settings}{num_frames}; ++$frame)
+		for (my $idx=0; $idx < $results_href->{'settings'}{'num_frames'}; ++$idx)
 		{
-			$frame_href = $results_href->{frames}{$frame} ;
+			$frame_href = $results_href->{'frames'}[$idx] ;
+			next unless scalar(keys %$frame_href) ;
+			my $frame = $frame_href->{$FRAME_FIELD} ;
 			$line = "$frame" ;
 			foreach my $field (sort keys %$frame_href)
 			{
 				next unless !ref($frame_href->{$field}) ;
+				next if $field eq $FRAME_FIELD ;
 				$line .= ",$frame_href->{$field}" ;
 			}
 			print $fh "$line\n" ;
@@ -410,72 +470,35 @@ L</analyse($src, $results_href, $ad_config_href, $csv, $expected_aref, $settings
 
 sub detect_from_file
 {
-	my ($detect) = @_ ;
+	my ($detect, $settings_href) = @_ ;
+	
+	$settings_href ||= {} ;
 
-	my %results = (
-		'frames'	=> {},
-		'settings'	=> {},
-	);
-
+	# check file
 	open my $fh, "<$detect" or die "Error: unable to read to detect file $detect : $!" ;
-	my $line = "" ;
-	my @head ;
-	my $file_settings_href = {} ;
-		
-	while (defined($line=<$fh>))
-	{
-		chomp $line ;
-		$line =~ s/\s+$// ;
-		my @fields = split /,/, $line ;
-		
-		## Read settings
-		if ($line =~ /^\# ([\w\.\d]+)\s*=\s*(\S.*)/)
-		{
-			$line =~ s/^\# // ;
-			Linux::DVB::DVBT::Advert::Config::parse_assignment($line, $file_settings_href) ;
-		}
-		else
-		{
-			## Save frames
-			# first line is fields definition
-			if (@head)
-			{
-				# got head, so save data
-				my $href = {} ;
-				my $framenum ;
-				for(my $i=0; $i < scalar(@head); ++$i)
-				{
-					$href->{$head[$i]} = $fields[$i] ;
-					
-					$framenum = $fields[$i] if $head[$i] eq $FRAME_FIELD ;
-				}
-				$results{'frames'}{$framenum} = $href if defined($framenum) ;
-			}
-			else
-			{
-				# get head
-				@head = @fields ;
-			}
-		}		
-	}
 	close $fh ;
-	
-	## Just make sure we have a full set of settings - use defaults if they are not already set in the detection file
-	my $default_settings_href = Linux::DVB::DVBT::Advert::dvb_advert_def_settings() ;
-	$results{'settings'} = Linux::DVB::DVBT::Advert::Config::merge_settings(
-								$default_settings_href,
-								$file_settings_href,
-							) ;
+						
+	## Do detection
+	my $det_aref = Linux::DVB::DVBT::Advert::dvb_advert_detect_from_file($detect, $settings_href) ;
 
-	if ($DEBUG)
+	my ($results_href, $adata_ref) = @$det_aref ;
+	
+	# tie an array to the internal data - this is *much* more effecient than letting Perl gobble up
+	# 10x the memory
+	my @frames ;
+	tie @frames, 'Linux::DVB::DVBT::Advert', 'ADATA', [$$adata_ref] ;
+	$results_href->{'frames'} = \@frames ;
+#	$results_href->{'__adata'} = $adata_ref ;
+	
+	if ($DEBUG >= 10)
 	{
-		print Data::Dumper->Dump(["Default Settings", $default_settings_href]) ;
-		print Data::Dumper->Dump(["Settings (merged)", $results{'settings'}]) ;
+		print "Read $results_href->{settings}{num_frames} frames\n" ;
+		print Data::Dumper->Dump(["Results", $results_href]) ;
 	}
 
-	
-	return \%results ;
+	return $results_href ;
 }
+
 
 
 #-----------------------------------------------------------------------------
@@ -557,9 +580,11 @@ sub analyse
 	my ($src, $results_href, $ad_config_href, $channel, $csv, $expected_aref, $extra_settings_href) = @_ ;
 
 	my @cut_list = () ;
+
+	Linux::DVB::DVBT::Advert::Mem::print_used("Start of analyse") ;
 	
 	## Frame results
-	my $frames_href = $results_href->{'frames'} ;
+	my $frames_adata_aref = $results_href->{'frames'} ;
 	
 	## Should contain all the settings used during detection
 	my $results_settings_href = $results_href->{'settings'} || {} ;
@@ -599,28 +624,20 @@ sub analyse
 									$extra_settings_href,
 								) ;
 
-	## Create a list of frames (in order) once to speed things up
-	$results_href->{$_FRAMENUMS_KEY} = [ sort {$a <=> $b } keys %$frames_href ] ;
-	
-	## Need to create a 'frame_end' field for frame gap calcs
-	foreach my $framenum (@{$results_href->{$_FRAMENUMS_KEY}})
-	{
-		$frames_href->{$framenum}{'frame_end'} = $frames_href->{$framenum}{'frame'} ;
-	}
-	
 	## Add expected results
 	# actually a list of adverts (i.e. and advert is between start & end)
 	if ($expected_aref && (ref($expected_aref) eq 'ARRAY') )
 	{
 		my $expect_href = shift @$expected_aref ;
-		foreach my $framenum (@{$results_href->{$_FRAMENUMS_KEY}})
+		foreach my $frame_href (@$frames_adata_aref)
 		{
-			$frames_href->{$framenum}{$EXPECTED_FIELD} = 1 ;
+			my $framenum = $frame_href->{'frame'} ;
+			$frame_href->{$EXPECTED_FIELD} = 1 ;
 			if ($expect_href)
 			{
 				if ( ($framenum >= $expect_href->{'start'}) && ($framenum <= $expect_href->{'end'}) )
 				{
-					$frames_href->{$framenum}{$EXPECTED_FIELD} = 0 ;
+					$frame_href->{$EXPECTED_FIELD} = 0 ;
 				}
 				elsif ($framenum > $expect_href->{'end'})
 				{
@@ -630,26 +647,37 @@ sub analyse
 		}
 	}
 	
-prt_frames($frames_href) if $DEBUG >= 3 ;
+prt_frames($frames_adata_aref) if $DEBUG >= 3 ;
 	
 	# total number of frames
-	my $last_frame = $results_href->{$_FRAMENUMS_KEY}[-1] ;
+	my $last_frame = -1 ;
+	if (scalar(@$frames_adata_aref))
+	{
+		$last_frame = $frames_adata_aref->[-1]{'frame'} ;
+	}
 	my $total_frames = $last_frame + 1 ;
 	$results_settings_href->{'num_frames'} = $total_frames ;
 	
+	return @cut_list unless $total_frames ;
+	
+	
 	# total packets
-	my $total_pkts = $frames_href->{$last_frame}{'end_pkt'} ;
+	my $total_pkts = $frames_adata_aref->[$last_frame]{'end_pkt'} ;
 
 print "== analyse() == : total frames:$total_frames, pkts:$total_pkts\n" if $DEBUG ;
 
 	## Split frame results out into arrays (containing the HASH refs stored in results) where the specified
 	## field flag is true
-	my @black_frames = frames_list($results_href, 'black_frame') ;
-	my @scene_frames = frames_list($results_href, 'scene_frame') ;
-	my @size_frames = frames_list($results_href, 'size_change') ;
-	my @logo_frames = frames_list($results_href, 'logo_frame') ;
-	my @silent_frames = frames_list($results_href, 'silent_frame') ;
-	my @all_frames = frames_list($results_href, '') ;
+	my $black_frames_ada_ref = frames_list($results_href, 'black_frame') ;
+#	my $scene_frames_ada_aref = frames_list($results_href, 'scene_frame') ;
+#	my $size_frames_ada_aref = frames_list($results_href, 'size_change') ;
+	my $logo_frames_ada_aref = frames_list($results_href, 'logo_frame') ;
+	my $silent_frames_ada_aref = frames_list($results_href, 'silent_frame') ;
+#	my $all_frames_ada_aref = frames_list($results_href, '') ;
+
+	my $csv_frames_aref = new_csv_frames($results_href) ;
+
+	Linux::DVB::DVBT::Advert::Mem::print_used(" + created ADA arrays") ;
 
 
 #	if ($DEBUG)
@@ -685,6 +713,7 @@ print "== analyse() == : total frames:$total_frames, pkts:$total_pkts\n" if $DEB
 	my $rise_thresh = $logo_settings_href->{'logo_rise_threshold'} || 1 ;
 	my $fall_thresh = $logo_settings_href->{'logo_fall_threshold'} || 1 ;
 
+	Linux::DVB::DVBT::Advert::Mem::print_used(" + got settings") ;
 
 
 	## Skip if disabled
@@ -717,20 +746,27 @@ print "== analyse() == : total frames:$total_frames, pkts:$total_pkts\n" if $DEB
 	## Check that this channel doesn't splat logos across the adverts too!
 	my $logo_frames_percent = (100.0 * $results_settings_href->{'total_logo_frames'}) / (1.0 * $results_settings_href->{'num_frames'}) ;
 print "CUTS: Logo % = $logo_frames_percent\n" if $DEBUG ;
+
 	if ($logo_frames_percent > 90.0)
 	{
 print "CUTS: Skipping ALL-LOGOS frames...\n" if $DEBUG ;
-		@logo_frames = () ;
+##TODO: fix....
+		@$logo_frames_ada_aref = () ;
 	}
 
 	##--[ Black detect ]----------------------------------------------------
-	if (@black_frames)
+	Linux::DVB::DVBT::Advert::Mem::print_used("Black detect") ;
+	my $new_black_frames_aref = [] ;
+	if (@$black_frames_ada_ref)
 	{
+#print STDERR "black detect\n" ;
 		## process
-		@black_cut_list = process_black_frames(\@black_frames, 
+		@black_cut_list = process_black_frames($black_frames_ada_ref, $new_black_frames_aref,
 								$total_pkts, $total_frames, $black_settings_href,
-								$frames_href, \@csv_settings) ;
-
+								$frames_adata_aref, $csv_frames_aref, \@csv_settings) ;
+								
+		$black_frames_ada_ref = undef ;
+		
 		## validate cuts
 		validate_cutlist(\@black_cut_list, $black_settings_href) ;
 								
@@ -738,15 +774,27 @@ print "CUTS: Skipping ALL-LOGOS frames...\n" if $DEBUG ;
 		@cut_list = @black_cut_list ;
 
 print "BLACK CUTS: " . scalar(@black_cut_list) . "\n" if $DEBUG ;
+
+#print STDERR "black detect - done\n" ;
 	}	
 	
 	##--[ Logo detect ]----------------------------------------------------
-	if (@logo_frames)
+	if (@$logo_frames_ada_aref)
 	{
+#print STDERR "logo detect\n" ;
+		Linux::DVB::DVBT::Advert::Mem::print_used("Logo detect") ;
+
+		my $scene_frames_ada_aref = frames_list($results_href, 'scene_frame') ;
+		my $all_frames_ada_aref = frames_list($results_href, '') ;
+
 		## process
-		@logo_cut_list = process_logo_frames(\@all_frames, \@black_frames, \@scene_frames, 
+		@logo_cut_list = process_logo_frames($all_frames_ada_aref, $new_black_frames_aref, $scene_frames_ada_aref, 
 								$total_pkts, $total_frames, $logo_settings_href,
-								$frames_href, \@csv_settings) ;
+								$frames_adata_aref, $csv_frames_aref, \@csv_settings) ;
+
+		$scene_frames_ada_aref = undef ;
+		$all_frames_ada_aref = undef ;
+		$logo_frames_ada_aref = undef ;
 
 		## validate cuts
 		validate_cutlist(\@logo_cut_list, $logo_settings_href) ;
@@ -763,15 +811,22 @@ print "LOGO CUTS: " . scalar(@logo_cut_list) . "\n" if $DEBUG ;
 			@logo_cut_list = () ;
 print " + Cleared LOGO CUTS\n" if $DEBUG ;
 		}
+#print STDERR "logo detect - done\n" ;
 	}
 
+
 	##--[ Silence detect ]----------------------------------------------------
-	if (!@logo_cut_list && @black_frames && @silent_frames)
+	if (!@logo_cut_list && @$new_black_frames_aref && $silent_frames_ada_aref)
 	{
+#print STDERR "silence detect\n" ;
+		Linux::DVB::DVBT::Advert::Mem::print_used("Silence detect") ;
+		
 		## process
-		@silent_cut_list = process_silent_frames(\@black_frames, \@silent_frames,
+		@silent_cut_list = process_silent_frames($new_black_frames_aref, $silent_frames_ada_aref,
 								$total_pkts, $total_frames, $silent_settings_href,
-								$frames_href, \@csv_settings) ;
+								$frames_adata_aref, $csv_frames_aref, \@csv_settings) ;
+								
+		$silent_frames_ada_aref = undef ;
 
 		## validate cuts
 		validate_cutlist(\@silent_cut_list, $silent_settings_href) ;
@@ -783,18 +838,17 @@ print "SILENT CUTS: " . scalar(@silent_cut_list) . "\n" if $DEBUG ;
 		{
 			@cut_list = @silent_cut_list ;
 		}
+#print STDERR "silence detect - done\n" ;
 	}
+
+#print STDERR "Detect - end\n" ;
 	
 	##--[ Final ]----------------------------------------------------
-	@black_frames = () ;
-	@logo_frames = () ;
-	@scene_frames = ();
-	@size_frames = () ;
-	@silent_frames = () ;
-	@all_frames = () ;
+	Linux::DVB::DVBT::Advert::Mem::print_used("Detect end") ;
 
 	if ($DEBUG)
 	{
+#print STDERR "printing cut lists...\n" ;
 		if (@black_cut_list)
 		{
 			dump_cutlist("BLACK CUT LIST", \@black_cut_list, "#") ;
@@ -809,20 +863,30 @@ print "SILENT CUTS: " . scalar(@silent_cut_list) . "\n" if $DEBUG ;
 		}
 	
 		dump_cutlist("FINAL CUT LIST", \@cut_list, "") ;
+#print STDERR "done printing cut lists...\n" ;
 	}
 	
 	## Save CSV info
 	if ($csv)
 	{
+#print STDERR "write csv\n" ;
+		Linux::DVB::DVBT::Advert::Mem::print_used("Writing CSV") ;
+		
 		## Add cut list as program boundaries
-		csv_add_prog($results_href, $PROG_FIELD, \@cut_list) ;
+		csv_add_prog($results_href, $csv_frames_aref, $PROG_FIELD, \@cut_list) ;
 		
 		## write out csv
-		write_csv($csv, $results_href, @csv_settings) ;
+		write_csv($csv, $results_href, $csv_frames_aref, @csv_settings) ;
+
+#print STDERR "write csv - done\n" ;
 	}
 
 	## Tidy up
-	delete $results_href->{'_framenums'} ;
+	$results_href = undef ;
+
+	Linux::DVB::DVBT::Advert::Mem::print_used("End of analyse") ;
+
+#print STDERR "Analyse - done\n" ;
 
 	## return results
 	return @cut_list ;
@@ -842,6 +906,10 @@ sub ad_cut
 {
 	my ($src_file, $cut_file, $cut_list_aref) = @_ ;
 	
+	croak "Unable to read \"$src_file\"" unless -f $src_file ;
+	croak "Zero-length file \"$src_file\"" unless -s $src_file ;
+	croak "Must specify a destination filename" unless $cut_file ;
+
 	# ensure dest directory exists
 	my $dir = dirname($cut_file) ;
 	if (! -d $dir)
@@ -868,6 +936,10 @@ to $cut_file with suffix XXXX where XXXX is in incrementing count starting at 00
 sub ad_split
 {
 	my ($src_file, $cut_file, $cut_list_aref) = @_ ;
+	
+	croak "Unable to read \"$src_file\"" unless -f $src_file ;
+	croak "Zero-length file \"$src_file\"" unless -s $src_file ;
+	croak "Must specify a destination filename" unless $cut_file ;
 	
 	# ensure dest directory exists
 	my $dir = dirname($cut_file) ;
@@ -954,51 +1026,74 @@ sub write_default_config
 #-----------------------------------------------------------------------------
 # Split frame results out into arrays (containing the HASH refs stored in results) where the specified
 # field flag is true. If flag_field is empty then return the list of all frames
+#
+# XS
+#
 sub frames_list
 {
 	my ($results_href, $flag_field) = @_ ;
-	my @list ;
 
-	# Extract list
-	my $frames_href = $results_href->{'frames'} ;
-	foreach my $framenum (@{$results_href->{$_FRAMENUMS_KEY}})
-	{
-		my $ok = $flag_field ? $frames_href->{$framenum}{$flag_field} : 1 ;
-		
-# TODO - modify to create new HASH { gap=>X, entry_href=>$frames_href->{$framenum} } to save memory......
+	my @list_ada ;
 	
-		# copy HASH entry
-		push @list, { %{$frames_href->{$framenum}} } if ($ok) ;
-	}
+	my $thing = tied @{$results_href->{'frames'}} ;
+
+	tie @list_ada, 'Linux::DVB::DVBT::Advert', 'FILTER', 
+		[$thing, $flag_field, 1] ;
+
+	my $ada = tied @list_ada ;
+	$ada->update_gaps() ;
 	
-	# Update gaps
-	update_gap(\@list) ;	
-	
-	return @list ;	
+	return \@list_ada ;	
 }
 
 #-----------------------------------------------------------------------------
 # Pull out any entries where the specified field >= threshold
+#
 sub frames_matching
 {
-	my ($frames_aref, $flag_field, $threshold) = @_ ;
+	my ($frames_adata_aref, $flag_field, $threshold) = @_ ;
+
 	my @list ;
 
-	foreach my $href (@$frames_aref)
-	{
-		my $ok = $href->{$flag_field} >= $threshold ;
-	
-		# copy HASH entry
-		push @list, { %$href } if ($ok) ;
-	}
-	
-	# Update gaps
-	update_gap(\@list) ;
-	
+	my $thing = tied @$frames_adata_aref ;
+
+	my @list_ada ;
+	tie @list_ada, 'Linux::DVB::DVBT::Advert', 'FILTER', 
+		[$thing, $flag_field, $threshold] ;
+
+#dump_frames(\@list_ada, "frames_matching() - raw") ;
+
+	my $ada = tied @list_ada ;
+	$ada->update_gaps() ;
+
+#dump_frames(\@list_ada, "frames_matching() - updated gap") ;
+
 	# turn into a list of frame HASH entries
-	@list = frames_array_to_hashlist(\@list) ;	
-	
-	return @list ;	
+	@list = frames_array_to_hashlist(\@list_ada) ;	
+
+#dump_frames(\@list, "frames_matching() - frames_array_to_hashlist") ;
+
+	return \@list ;	
+}
+
+
+
+
+#---------------------------------------------------------------------------------
+# Convert a list of all frames into a list of frame HASH entries
+sub frames_array_to_hashlist
+{
+    my ($frames_aref) = @_ ;
+    
+    ## coalesce (also updates the gap settings)
+    my @frames = coalesce_frames($frames_aref,
+    	{
+    		'frame_window'	=> 1,
+    		'min_frames'	=> 1,
+    	}
+    ) ;
+    
+    return @frames ;
 }
 
 
@@ -1029,15 +1124,10 @@ sub frames_add_array
 	## pre-process subtracting array
 	my $first_frame = $add_frames_aref->[0]{'frame'} - $fuzziness ;
 	my $last_frame = $add_frames_aref->[-1]{'frame_end'} + $fuzziness ;
-#	my %add_frames ;
 	foreach my $href (@$add_frames_aref)
 	{
 		my $frame_start = $href->{'frame'} - $fuzziness ;
 		my $frame_end = $href->{'frame_end'} + $fuzziness ;
-#		foreach my $fnum ($frame_start..$frame_end)
-#		{
-#			$add_frames{$fnum}++ ;
-#		}
 	}
 
 	## pre-process source array
@@ -1321,6 +1411,25 @@ sub frames_increase_start
 # CSV
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+#-----------------------------------------------------------------------------
+#
+sub new_csv_frames
+{
+	my ($results_href) = @_ ;
+
+#print STDERR "new_csv_frames()\n";
+
+	# Create
+	my @list ;
+
+	my $thing = tied @{$results_href->{'frames'}} ;
+
+	tie @list, 'Linux::DVB::DVBT::Advert', 'ADV', [$thing] ;
+	
+	return \@list ;	
+}
+
+
 #---------------------------------------------------------------------------------
 sub csv_add_setting
 {
@@ -1333,16 +1442,23 @@ sub csv_add_setting
 #---------------------------------------------------------------------------------
 sub csv_add_prog
 {
-	my ($results_href, $prog_field, $cutlist_aref) = @_ ;
+	my ($results_href, $csv_frames_aref, $prog_field, $cutlist_aref) = @_ ;
 
-	my $frames_href = $results_href->{'frames'} ;
+print "csv_add_prog()\n" if $DEBUG;
 
 	my @cuts = @$cutlist_aref ;
 	my $cut_href = shift @cuts ;
 	
-	foreach my $framenum (@{$results_href->{$_FRAMENUMS_KEY}})
+	my $adv = tied @$csv_frames_aref ;
+	$adv->add_key($prog_field) ;
+
+	for(my $i=0; $i < scalar(@$csv_frames_aref); ++$i) 
 	{
-		my $href = $frames_href->{$framenum} ;
+		#my $href = $csv_frames_aref->[$i] ;
+		my $href = {} ;
+		my $framenum = $csv_frames_aref->[$i]->{'frame'} ;
+
+print " + frame $framenum : cut_href s=$cut_href->{'frame'} .. e=$cut_href->{'frame_end'}\n" if $DEBUG;
 
 		$href->{$prog_field} = 100 ;
 		my $done = 0 ;
@@ -1372,41 +1488,48 @@ sub csv_add_prog
 				}
 			}
 		}
+		
+		$csv_frames_aref->[$i] = $href ;
 	}
+
+print "csv_add_prog() - END\n" if $DEBUG;
 
 }
 
 #-----------------------------------------------------------------------------
 sub csv_add_frames
 {
-	my ($csv_settings_aref, $frames_href, $new_frames_aref, $field, $threshold, $new_field) = @_ ;
+	my ($csv_settings_aref, $frames_adata_aref, $csv_frames_aref, $new_frames_aref, $field, $threshold, $new_field) = @_ ;
+
+#print STDERR "csv_add_frames()\n";
 	
 	push @{$csv_settings_aref->[0]}, $field ;
 	push @{$csv_settings_aref->[1]}, $threshold ;
 
 	# start by clearing
-	foreach my $frame (keys %$frames_href)
-	{
-		$frames_href->{$frame}{$field} = 0 ;
-	}
-	
+	my $adv = tied @$csv_frames_aref ;
+	$adv->add_key($field) ;
+
 	# next add frames
 	foreach my $buff_href (@$new_frames_aref)
 	{
 		my $fnum_start = $buff_href->{'frame'} ;
-		my $fnum_end = $buff_href->{'frame_end'} ;
+		my $fnum_end = $buff_href->{'frame_end'} || $fnum_start ;
+
 		if ( defined($fnum_end) && ($fnum_end > $fnum_start))
 		{
 			foreach my $fnum ($fnum_start..$fnum_end)
 			{
-				$frames_href->{$fnum}{$field} = $buff_href->{$new_field} ;
+				$csv_frames_aref->[$fnum] = { $field => $buff_href->{$new_field} };
 			}
 		}
 		else
 		{
-			$frames_href->{$fnum_start}{$field} = $buff_href->{$new_field} ;	
+			$csv_frames_aref->[$fnum_start] = { $field => $buff_href->{$new_field} };
 		}
 	}
+
+#print STDERR "csv_add_frames() - END\n";
 
 }
 
@@ -1414,7 +1537,7 @@ sub csv_add_frames
 # Write CSV
 sub write_csv
 {
-    my ($fname, $results_href, $headings_aref, $levels_aref) = @_;
+    my ($fname, $results_href, $csv_frames_aref, $headings_aref, $levels_aref) = @_;
 
 print "Writing CSV $fname ... \n" if $DEBUG ;
 
@@ -1426,17 +1549,19 @@ print "Writing CSV $fname ... \n" if $DEBUG ;
 	}
 	print $fh "\n" ;
 	
-	my $frames_href = $results_href->{'frames'} ;
-	foreach my $framenum (@{$results_href->{$_FRAMENUMS_KEY}})
+	my $frames_adata_aref = $results_href->{'frames'} ;
+	foreach my $frame_href (@$frames_adata_aref)
 	{
-		my $href = $frames_href->{$framenum} ;
-
+		my $frame = $frame_href->{'frame'} ;
+		my $href = $csv_frames_aref->[$frame] ;
+		
 		my $head = $headings_aref->[0] ;
 		print $fh "$href->{$head}" ;
 		for (my $i=1; $i < scalar(@$headings_aref); ++$i)
 		{
 			$head = $headings_aref->[$i] ;
-			print $fh ",$href->{$head}" ;
+			my $val = exists($href->{$head}) ? $href->{$head} : $frame_href->{$head} ;
+			print $fh ",$val" ;
 		}
 		print $fh "\n" ;
 	}
@@ -1499,6 +1624,7 @@ sub calc_gap
 }
 
 #-----------------------------------------------------------------------------
+#
 sub update_gap
 {
 	my ($frames_aref) = @_ ;
@@ -1506,11 +1632,13 @@ sub update_gap
 	my $prev_frame_end = -1 ;
 	foreach my $href (@$frames_aref)
 	{
-		$href->{'gap'} = calc_gap($href->{'frame'}, $prev_frame_end) ;
+		my $frame = $href->{'frame'} ;
+		$href->{'gap'} = calc_gap($frame, $prev_frame_end) ;
 
 		$prev_frame_end = $href->{'frame_end'} ;
 	}	
 }
+
 
 #-----------------------------------------------------------------------------
 # Return the number of frames for this frame entry
@@ -1642,23 +1770,6 @@ print "\n" if $DEBUG ;
 	}
 }
 
-#---------------------------------------------------------------------------------
-# Convert a list of all frames into a list of frame HASH entries
-sub frames_array_to_hashlist
-{
-    my ($frames_aref) = @_ ;
-    
-    ## coalesce (also updates the gap settings)
-    my @frames = coalesce_frames($frames_aref,
-    	{
-    		'frame_window'	=> 1,
-    		'min_frames'	=> 1,
-    	}
-    ) ;
-    
-    return @frames ;
-}
-
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 # ANALYSIS UTILS
@@ -1668,9 +1779,10 @@ sub frames_array_to_hashlist
 #
 sub coalesce_frames
 {
-    my ($frames_aref, $settings_href, $start_framenum) = @_ ;
+    my ($frames_aref, $settings_href, $start_framenum, $title) = @_ ;
     
-print "coalesce_frames()\n" if $DEBUG ;
+    $title ||= "" ;
+print "coalesce_frames($title)\n" if $DEBUG ;
 
 	$start_framenum ||= 0 ;
     
@@ -1749,7 +1861,7 @@ if ($DEBUG) { print " - removed spurious : "; dump_frame($curr_href) ; }
 		pop @frames ;
 	}
 
-print "coalesce_frames() - DONE\n" if $DEBUG ;
+print "coalesce_frames($title) - DONE\n" if $DEBUG ;
 
 	update_gap(\@frames) ;
 
@@ -1903,7 +2015,7 @@ sub dump_frames
     my @edges ;
     my $edge_href ;
 
-	print "\n----[ $msg ]------------------------------\n" ;
+	print "\n----[ $msg (", scalar(@$frames_aref)," frames) ]------------------------------\n" ;
 	foreach my $href (@$frames_aref)
 	{
 		while ( $edge_href && ($href->{'frame'} > $edge_href->{'frame'}) )
@@ -1919,7 +2031,7 @@ sub dump_frames
 			print "*** $edge_href->{'frame'} ** " . ($edge_href->{'type'} eq 'start_pkt' ? "vvvvvvvvvv" : "^^^^^^^^^^") . "******\n" ;
 	    	$edge_href = shift @edges ;
 		}
-		print "?????????\n" if ($href->{'gap'}<0);
+		print "???BAD??? " if ($href->{'gap'}<0);
 		
 		dump_frame($href) ;
 
@@ -1934,22 +2046,22 @@ sub dump_frames
 
 sub prt_frame
 {
-    my ($frames_href, $framenum) = @_;
+    my ($frames_aref, $framenum) = @_;
 
 	print "$framenum : " ;
-	foreach my $key (sort keys %{$frames_href->{$framenum}})
+	foreach my $key (sort keys %{$frames_aref->[$framenum]})
 	{
-		print " $key=$frames_href->{$framenum}{$key}" ;
+		print " $key=$frames_aref->[$framenum]{$key}" ;
 	}
 	print "\n" ;
 }
 sub prt_frames
 {
-    my ($frames_href) = @_;
+    my ($frames_aref) = @_;
 
-	foreach my $framenum (sort {$a <=> $b} keys %$frames_href)
+	foreach my $frame_href (@$frames_aref)
 	{
-		prt_frame($frames_href, $framenum) ;
+		prt_frame($frames_aref, $frame_href->{'frame'}) ;
 	}
 }
 
@@ -2064,7 +2176,7 @@ print " + extend\n" if $DEBUG ;
 #
 sub process_black_frames
 {
-    my ($black_frames_aref, $total_pkts, $total_frames, $settings_href, $frames_href, $csv_settings_aref) = @_ ;
+    my ($black_frames_ada_ref, $new_black_frames_aref, $total_pkts, $total_frames, $settings_href, $frames_adata_aref, $csv_frames_aref, $csv_settings_aref) = @_ ;
 
 if ($DEBUG)
 {
@@ -2076,22 +2188,18 @@ print Data::Dumper->Dump(["Settings:", $settings_href]) ;
 	## strip out any spurious frames
 	
 	# start by coalescing the contiguous black frames
-	my @frames = coalesce_frames($black_frames_aref, $settings_href, 0) ;
+	my @frames = coalesce_frames($black_frames_ada_ref, $settings_href, 0) ;
 
 dump_frames(\@frames, "BLACK coalesced") if $DEBUG >= 2 ;
 
-	csv_add_frames($csv_settings_aref, $frames_href, \@frames, 
+	csv_add_frames($csv_settings_aref, $frames_adata_aref, $csv_frames_aref, \@frames, 
 		$BLACK_COALESCED_FIELD, "0:1:1", 'black_frame') ;
 
 	## update input array with coalesced version
-	my $num_black =  scalar(@$black_frames_aref) ;
-	for (my $i=0; $i <$num_black; ++$i)
-	{
-		pop @$black_frames_aref ;
-	}
+	my $num_black =  scalar(@$black_frames_ada_ref) ;
 	foreach my $href (@frames)
 	{
-		push @$black_frames_aref, $href ;
+		push @$new_black_frames_aref, $href ;
 	}
 
 	## Create black frame cutlist
@@ -2106,7 +2214,7 @@ dump_frames(\@cut_list, "Final BLACK Cut List") if $DEBUG >= 2 ;
 #
 sub process_silent_frames
 {
-    my ($black_frames_aref, $silent_frames_aref, $total_pkts, $total_frames, $settings_href, $frames_href, $csv_settings_aref) = @_ ;
+    my ($black_frames_aref, $silent_frames_ada_aref, $total_pkts, $total_frames, $settings_href, $frames_adata_aref, $csv_frames_aref, $csv_settings_aref) = @_ ;
 
 if ($DEBUG)
 {
@@ -2118,9 +2226,9 @@ print Data::Dumper->Dump(["Settings:", $settings_href]) ;
 	## strip out any spurious frames
 	
 	# start by coalescing the contiguous black frames
-	my @silent_frames = coalesce_frames($silent_frames_aref, $settings_href, 0) ;
+	my @silent_frames = coalesce_frames($silent_frames_ada_aref, $settings_href, 0) ;
 
-	csv_add_frames($csv_settings_aref, $frames_href, \@silent_frames, 
+	csv_add_frames($csv_settings_aref, $frames_adata_aref, $csv_frames_aref, \@silent_frames, 
 		$SILENT_COALESCED_FIELD, "0:1:1", 'silent_frame') ;
 
 #my $SILENCE_WINDOW = 100 ;
@@ -2167,7 +2275,7 @@ if ($DEBUG) {print " + silent_black @ $framenum : " ; dump_frame($href) ;}
 	@combined_frames = coalesce_frames(\@combined_frames, $settings_href, 0) ;
 dump_frames(\@combined_frames, "COMBINED COAL") if $DEBUG >= 2 ;
 
-	csv_add_frames($csv_settings_aref, $frames_href, \@combined_frames, 
+	csv_add_frames($csv_settings_aref, $frames_adata_aref, $csv_frames_aref, \@combined_frames, 
 		$SILENT_BLACK_FIELD, "0:1:1", 'black_frame') ;
 
 ##NEW###################################################
@@ -2183,7 +2291,7 @@ dump_frames(\@combined_frames, "COMBINED COAL") if $DEBUG >= 2 ;
 			frames_reduce_end($frame_href, \@silent_frames, $settings_href->{'reduce_end'}, $settings_href->{'reduce_min_gap'}) ;
 		}		
 
-		csv_add_frames($csv_settings_aref, $frames_href, \@combined_frames, 
+		csv_add_frames($csv_settings_aref, $frames_adata_aref, $csv_frames_aref, \@combined_frames, 
 			$REDUCED_SILENT_BLACK_FIELD, "0:1:1", 'black_frame') ;
 
 	}
@@ -2238,11 +2346,39 @@ sub bounding_frames
 
 
 #---------------------------------------------------------------------------------
+sub logo_add_frames
+{
+	my ($msg_str, $frames_adata_aref, $logo_frames_aref, $start_frame, $end_frame, $settings_href, $edge_ref) = @_ ;
+	
+#	my @add_frames ;
+	foreach my $fnum ($start_frame..$end_frame)
+	{
+			# save first edge
+			if ($edge_ref)
+			{
+				$$edge_ref = $fnum unless defined($$edge_ref) ;
+			}
+			
+			# spoof an entry that looks like a valid logo detection
+			my $buff_href = { %{$frames_adata_aref->[$fnum]} } ;
+			$buff_href->{'match_percent'} = $settings_href->{'logo_rise_threshold'} ;
+			$buff_href->{'ave_percent'} = $settings_href->{'logo_rise_threshold'} ;
+							
+if ($DEBUG) {print " + + $msg_str extended by : " ; dump_frame($buff_href) ;}
+
+#			push @add_frames, $buff_href ;
+			push @$logo_frames_aref, $buff_href ;
+	}
+#	push @$logo_frames_aref, @add_frames ;
+
+}
+
+#---------------------------------------------------------------------------------
 #
 sub process_logo_frames
 {
-    my ($logo_all_frames_aref, $black_frames_aref, $scene_frames_aref, $total_pkts, $total_frames, $settings_href, 
-    	$frames_href, $csv_settings_aref) = @_ ;
+    my ($logo_all_frames_ada_aref, $black_frames_aref, $scene_frames_ada_aref, $total_pkts, $total_frames, $settings_href, 
+    	$frames_adata_aref, $csv_frames_aref, $csv_settings_aref) = @_ ;
     	
 	my @cut_list ;
 
@@ -2253,14 +2389,31 @@ print "process_logo_frames()\n" ;
 print Data::Dumper->Dump(["Settings:", $settings_href]) ;
 }
 
+	my $logo_frames_adl_aref ;
+	$logo_frames_adl_aref = [] ;
+	
+	my @lf ;
+	my $thing = tied @$frames_adata_aref ;
+
+	tie @lf, 'Linux::DVB::DVBT::Advert', 'LOGO', 
+		[$thing] ;
+		
+	$logo_frames_adl_aref = \@lf ;
+	
+	my $adl = tied @$logo_frames_adl_aref ;
+	
+
 	## Threshold the frames based on average quality
-	my @frame_buffer ;
-	my @logo_frames ;
 	my $prev = 0 ;
 	my $detect_mode = 'rise' ;
-	foreach my $href (@$logo_all_frames_aref)
+	foreach my $href (@$logo_all_frames_ada_aref)
 	{
 		my $framenum = $href->{'frame'} ;
+
+if ($DEBUG)
+{
+		$adl->logo_frames_sanity($framenum) ;
+}
 		
 		## threshold detection with hysteresis
 		my $above = 0 ;
@@ -2301,8 +2454,24 @@ if ($DEBUG) {print " + rising edge : " ; dump_frame($href) ;}
 				#   Extended (scene):            ::::::::::::||||||||||||||||||||||||||||||...
 				#
 				my $start_framenum = $framenum ;
-#				my $start_framenum = $framenum - $settings_href->{'logo_ave_points'} + $settings_href->{'frame_window'} ;
-#				$start_framenum = 0 if $start_framenum < 0 ;
+				
+				## extend back while "raw" quality > threshold
+				my $extend_start = $start_framenum - $settings_href->{'logo_ave_points'} ;
+				$extend_start = 0 if ($extend_start < 0) ;
+				for (my $fnum = $start_framenum-1; $fnum >= $extend_start; --$fnum)
+				{
+					if (($frames_adata_aref->[$fnum]{'match_percent'} >= $settings_href->{'logo_rise_threshold'}))
+					{
+						$start_framenum = $fnum ;
+if ($DEBUG) {print " + + match extended by : " ; dump_frame($frames_adata_aref->[$fnum]) ;}
+					}
+					else
+					{
+						# stop
+						last ;
+					}
+				}
+				
 				my $found_edge = 0 ;
 				my $edge = undef ;
 
@@ -2314,7 +2483,7 @@ print " - black : rising frame $start_framenum, black before $black_before, blac
 
 				# find any scene changes around new start frame
 print "rising scene bounding..\n" if $DEBUG ;
-				my ($scene_before, $scene_after) = bounding_frames($start_framenum, $scene_frames_aref) ;
+				my ($scene_before, $scene_after) = bounding_frames($start_framenum, $scene_frames_ada_aref) ;
 
 print " - scene : rising frame $start_framenum, scene before $scene_before, scene after $scene_after\n" if $DEBUG ; 
 				
@@ -2322,26 +2491,7 @@ print " - scene : rising frame $start_framenum, scene before $scene_before, scen
 				if (($black_before < $start_framenum) && ( ($start_framenum-$black_before) < $settings_href->{'logo_ave_points'}))
 				{
 					++$found_edge ;
-
-					my @black_frames ;
-					foreach my $fnum ($black_before..$start_framenum-1)
-					{
-						if (exists($frames_href->{$fnum}))
-						{
-							# save first edge
-							$edge = $fnum unless defined($edge) ;
-							
-							# spoof an entry that looks like a valid logo detection
-							my $buff_href = { %{$frames_href->{$fnum}} } ;
-							$buff_href->{'match_percent'} = $settings_href->{'logo_rise_threshold'} ;
-							$buff_href->{'ave_percent'} = $settings_href->{'logo_rise_threshold'} ;
-							
-if ($DEBUG) {print " + + black extended by : " ; dump_frame($buff_href) ;}
-
-							push @black_frames, $buff_href ;
-						}
-					}
-					push @logo_frames, @black_frames ;
+					logo_add_frames("black", $frames_adata_aref, $logo_frames_adl_aref, $black_before, $framenum-1, $settings_href, \$edge) ;
 				}
 				
 				
@@ -2349,26 +2499,7 @@ if ($DEBUG) {print " + + black extended by : " ; dump_frame($buff_href) ;}
 				if (!$found_edge && ($scene_before < $start_framenum) && ( ($start_framenum-$scene_before) < $settings_href->{'logo_ave_points'}))
 				{
 					++$found_edge ;
-
-					my @scene_frames ;
-					foreach my $fnum ($scene_before..$start_framenum-1)
-					{
-						if (exists($frames_href->{$fnum}))
-						{
-							# save first edge
-							$edge = $fnum unless defined($edge) ;
-							
-							# spoof an entry that looks like a valid logo detection
-							my $buff_href = { %{$frames_href->{$fnum}} } ;
-							$buff_href->{'match_percent'} = $settings_href->{'logo_rise_threshold'} ;
-							$buff_href->{'ave_percent'} = $settings_href->{'logo_rise_threshold'} ;
-							
-if ($DEBUG) {print " + + scene extended by : " ; dump_frame($buff_href) ;}
-
-							push @scene_frames, $buff_href ;
-						}
-					}
-					push @logo_frames, @scene_frames ;
+					logo_add_frames("scene", $frames_adata_aref, $logo_frames_adl_aref, $scene_before, $framenum-1, $settings_href, \$edge) ;
 				}
 
 print " - found? $found_edge : edge=$edge\n" if $DEBUG ; 
@@ -2381,7 +2512,7 @@ print " + + start extending...\n" if $DEBUG ;
 					my $window_count = 0 ;
 					while ( ($fnum >= 0) && ($window_count < $settings_href->{'frame_window'}) )
 					{
-						if ($frames_href->{$fnum}{'match_percent'} >= $settings_href->{'logo_fall_threshold'})
+						if ($frames_adata_aref->[$fnum]{'match_percent'} >= $settings_href->{'logo_fall_threshold'})
 						{
 							$window_count = 0 ;
 						}
@@ -2400,16 +2531,17 @@ print " + + start extending...\n" if $DEBUG ;
 					my @start_frames ;
 					while ($fnum < $edge)
 					{
-						if ($frames_href->{$fnum}{'match_percent'} >= $settings_href->{'logo_rise_threshold'})
+						if ($frames_adata_aref->[$fnum]{'match_percent'} >= $settings_href->{'logo_rise_threshold'})
 						{
-if ($DEBUG) {print " + + start-extended by : " ; dump_frame($frames_href->{$fnum}) ;}
-							push @start_frames, $frames_href->{$fnum} ;
+if ($DEBUG) {print " + + start-extended by : " ; dump_frame($frames_adata_aref->[$fnum]) ;}
+#							push @start_frames, $frames_adata_aref->[$fnum] ;
+							unshift @$logo_frames_adl_aref, $frames_adata_aref->[$fnum] ;
 						}
 						++$fnum ;
 					}
 					
-					# insert thes at the start
-					unshift @logo_frames, @start_frames ;
+					# insert these at the start
+#					unshift @$logo_frames_adl_aref, @start_frames ;
 				}
 
 				## fall back on extending as much as possible
@@ -2418,15 +2550,15 @@ if ($DEBUG) {print " + + start-extended by : " ; dump_frame($frames_href->{$fnum
 					# failed to use scene change - fall back on using raw quality
 
 					## rising edge - prefix by previous points > threshold
-					
+
 					# calc where to start from (allow a window where quality can be < threshold)
 					# (need to use frame buffer)
-					my $end_index = scalar(@frame_buffer)-1 ;
+					my $end_index = $framenum-1 ;
 					my $start_index = $end_index ;
 					my $window_count = 0 ;
 					while ( ($start_index > 0) && ($end_index-$start_index < $settings_href->{'logo_ave_points'}) && ($window_count < $settings_href->{'frame_window'}) )
 					{
-						if ($frame_buffer[$start_index]{'match_percent'} >= $settings_href->{'logo_rise_threshold'})
+						if ($frames_adata_aref->[$start_index]{'match_percent'} >= $settings_href->{'logo_rise_threshold'})
 						{
 							$window_count = 0 ;
 						}
@@ -2436,29 +2568,29 @@ if ($DEBUG) {print " + + start-extended by : " ; dump_frame($frames_href->{$fnum
 						}
 						--$start_index ;
 					}
+					
 if ($DEBUG) {print " + start..end : $start_index .. $end_index\n" ; }
 					
 					# add frames (skip any < threshold)
 					++$start_index ;
-					foreach my $buff_href (@frame_buffer[$start_index..$end_index])
+					foreach my $buff_href (@$frames_adata_aref[$start_index..$end_index])
 					{
 						if ($buff_href->{'match_percent'} > $settings_href->{'logo_rise_threshold'})
 						{
 if ($DEBUG) {print " + + extended by : " ; dump_frame($buff_href) ;}
-							push @logo_frames, $buff_href ;
+							push @$logo_frames_adl_aref, $buff_href ;
 						}
 					}
 				}
 
-				update_gap(\@logo_frames) ;
+				$adl->update_gaps() ;
 
-
-dump_frames(\@logo_frames, "LOGO after extending due to rising edge") if $DEBUG >= 2;
+dump_frames($logo_frames_adl_aref, "LOGO after extending due to rising edge") if $DEBUG >= 2;
 
 			}
 			
 			## add this frame
-			push @logo_frames, $href ;
+			push @$logo_frames_adl_aref, $href ;
 
 			$prev = 1 ;
 		}
@@ -2468,160 +2600,133 @@ dump_frames(\@logo_frames, "LOGO after extending due to rising edge") if $DEBUG 
 			{
 if ($DEBUG) {print " + falling edge : " ; dump_frame($href) ;}
 
-				update_gap(\@logo_frames) ;
+				$adl->update_gaps() ;
 
-dump_frames(\@logo_frames, "LOGO before reducing due to falling edge") if $DEBUG >= 2;
+dump_frames($logo_frames_adl_aref, "LOGO before reducing due to falling edge") if $DEBUG >= 2;
 
 				## trailing edge - remove any raw points < threshold
 				# use logo array we're building
 
 				# remove ALL frames for the length of the buffer, then start adding them back iff > threshold AND not too far away
-				my $end_index = scalar(@logo_frames)-1 ;
+				my $end_index = scalar(@$logo_frames_adl_aref)-1 ;
 				my $start_index = $end_index-$settings_href->{'logo_ave_points'} ;
 				$start_index = 0 if $start_index < 0 ;
 				my $num_end_frames = $end_index - $start_index + 1 ;
-if ($DEBUG) {print " + + reduced by $num_end_frames frames (start idx=$start_index, end idx=$end_index) to : " ; dump_frame($logo_frames[$start_index]) ;}
+if ($DEBUG) {print " + + reduced by $num_end_frames frames (start idx=$start_index, end idx=$end_index) to : " ; dump_frame($logo_frames_adl_aref->[$start_index]) ;}
 				
-				splice @logo_frames, $start_index ;
-
-				# create a list of these removed frames that are > threshold
-				my @end_frames = () ;
-				my $new_framenum = $logo_frames[-1]{'frame'}+1 ;
-				foreach (1..$num_end_frames)
+				splice @$logo_frames_adl_aref, $start_index ;
+				
+				## check we have some points left?
+				if (scalar(@$logo_frames_adl_aref))
 				{
-					if ($frames_href->{$new_framenum}{'match_percent'} >= $settings_href->{'logo_rise_threshold'})
+
+					# create a list of these removed frames that are > threshold
+					my @end_frames = () ;
+	print STDERR "logo_frames_adl_aref size = ",scalar(@$logo_frames_adl_aref),"\n"	 if $DEBUG >= 2;			
+	print STDERR "About to read from logo_frames_adl_aref[-1] ...\n"  if $DEBUG >= 2;			
+					my $new_framenum = $logo_frames_adl_aref->[-1]{'frame'}+1 ;
+					foreach (1..$num_end_frames)
 					{
-if ($DEBUG) {print " >> end_frames + $new_framenum " ; dump_frame($frames_href->{$new_framenum}) ;}
-						push @end_frames, $frames_href->{$new_framenum} ;
+						if ($frames_adata_aref->[$new_framenum]{'match_percent'} >= $settings_href->{'logo_rise_threshold'})
+						{
+	if ($DEBUG) {print " >> end_frames + $new_framenum " ; dump_frame($frames_adata_aref->[$new_framenum]) ;}
+							push @end_frames, $frames_adata_aref->[$new_framenum] ;
+						}
+						++$new_framenum ;
 					}
-					++$new_framenum ;
-				}
-
-				# coalesce valid frames together
-				update_gap(\@end_frames) ;
-				@end_frames = coalesce_frames(\@end_frames, $settings_href, $logo_frames[-1]{'frame'}) ;
-
-dump_frames(\@end_frames, "coalesced end logo frames") if $DEBUG >= 2;
-				
-				# Just use the first block - the end *should* be the real end of the program
-				if (@end_frames)
-				{
-					my $f_href = $end_frames[0] ;
-					foreach my $new_framenum ($f_href->{'frame'}..$f_href->{'frame_end'})
-					{
-						push @logo_frames, $frames_href->{$new_framenum} ;
-if ($DEBUG) {print " + + re-extend by : " ; dump_frame($frames_href->{$new_framenum}) ;}
-					}
-				}
-
-				update_gap(\@logo_frames) ;
-				
-dump_frames(\@logo_frames, "LOGO after reducing") if $DEBUG >= 2 ;
-
-				
-				## see if we can expand out to a scene change
-				my $end_framenum = $logo_frames[-1]{'frame'} ;
-print " end frame=$end_framenum\n" if $DEBUG ; 
-
-				# find any black frames around new end frame
-print "falling black bounding..\n" if $DEBUG ;
-				my ($black_before, $black_after) = bounding_frames($end_framenum, $black_frames_aref) ;
-
-print " - black : falling frame $end_framenum, black before $black_before, black after $black_after\n" if $DEBUG ; 
-
-				# find any scene changes around new end frame
-print "falling scene bounding..\n" if $DEBUG ;
-				my ($scene_before, $scene_after) = bounding_frames($end_framenum, $scene_frames_aref) ;
-
-print " - scene : falling frame $end_framenum, scene before $scene_before, scene after $scene_after\n" if $DEBUG ; 
-
-				my $found_edge = 0 ;
-
-				# if black frame occurs after the end frame AND it's not too far away, then extend to this point
-				if (($black_after > $end_framenum) && ( ($black_after-$end_framenum) < $settings_href->{'logo_ave_points'}))
-				{
-					++$found_edge ;
+	
+					# coalesce valid frames together
+					update_gap(\@end_frames) ;
+					@end_frames = coalesce_frames(\@end_frames, $settings_href, $logo_frames_adl_aref->[-1]{'frame'}, "logo end frames") ;
+	
+	dump_frames(\@end_frames, "coalesced end logo frames") if $DEBUG >= 2;
 					
-					foreach my $fnum ($end_framenum+1..$black_after)
+					# Just use the first block - the end *should* be the real end of the program
+					if (@end_frames)
 					{
-						if (exists($frames_href->{$fnum}))
+						my $f_href = $end_frames[0] ;
+						foreach my $new_framenum ($f_href->{'frame'}..$f_href->{'frame_end'})
 						{
-							# spoof an entry that looks like a valid logo detection
-							my $buff_href = { %{$frames_href->{$fnum}} } ;
-							$buff_href->{'match_percent'} = $settings_href->{'logo_rise_threshold'} ;
-							$buff_href->{'ave_percent'} = $settings_href->{'logo_rise_threshold'} ;
-							
-if ($DEBUG) {print " + + black extended by ($fnum): " ; dump_frame($buff_href) ;}
-
-							push @logo_frames, $buff_href ;
+							push @$logo_frames_adl_aref, $frames_adata_aref->[$new_framenum] ;
+	if ($DEBUG) {print " + + re-extend by : " ; dump_frame($frames_adata_aref->[$new_framenum]) ;}
 						}
 					}
-				}
-
-				# if scene change occurs after the end frame AND it's not too far away, then extend to this point
-				if (!$found_edge && ($scene_after > $end_framenum) && ( ($scene_after-$end_framenum) < $settings_href->{'logo_ave_points'}))
-				{
-					++$found_edge ;
-
-					foreach my $fnum ($end_framenum+1..$scene_after)
+					
+					@end_frames = () ;
+	
+					$adl->update_gaps() ;
+					
+	dump_frames($logo_frames_adl_aref, "LOGO after reducing") if $DEBUG >= 2 ;
+	
+					
+					## see if we can expand out to a scene change
+					my $end_framenum = $logo_frames_adl_aref->[-1]{'frame'} ;
+	print " end frame=$end_framenum\n" if $DEBUG ; 
+	
+					# find any black frames around new end frame
+	print "falling black bounding..\n" if $DEBUG ;
+					my ($black_before, $black_after) = bounding_frames($end_framenum, $black_frames_aref) ;
+	
+	print " - black : falling frame $end_framenum, black before $black_before, black after $black_after\n" if $DEBUG ; 
+	
+					# find any scene changes around new end frame
+	print "falling scene bounding..\n" if $DEBUG ;
+					my ($scene_before, $scene_after) = bounding_frames($end_framenum, $scene_frames_ada_aref) ;
+	
+	print " - scene : falling frame $end_framenum, scene before $scene_before, scene after $scene_after\n" if $DEBUG ; 
+	
+					my $found_edge = 0 ;
+	
+					# if black frame occurs after the end frame AND it's not too far away, then extend to this point
+					if (($black_after > $end_framenum) && ( ($black_after-$end_framenum) < $settings_href->{'logo_ave_points'}))
 					{
-						if (exists($frames_href->{$fnum}))
-						{
-							# spoof an entry that looks like a valid logo detection
-							my $buff_href = { %{$frames_href->{$fnum}} } ;
-							$buff_href->{'match_percent'} = $settings_href->{'logo_rise_threshold'} ;
-							$buff_href->{'ave_percent'} = $settings_href->{'logo_rise_threshold'} ;
-							
-if ($DEBUG) {print " + + scene extended by ($fnum): " ; dump_frame($buff_href) ;}
-
-							push @logo_frames, $buff_href ;
-						}
+						++$found_edge ;
+						logo_add_frames("black", $frames_adata_aref, $logo_frames_adl_aref, $end_framenum+1, $black_after, $settings_href) ;
 					}
-				}
+	
+					# if scene change occurs after the end frame AND it's not too far away, then extend to this point
+					if (!$found_edge && ($scene_after > $end_framenum) && ( ($scene_after-$end_framenum) < $settings_href->{'logo_ave_points'}))
+					{
+						++$found_edge ;
+						logo_add_frames("scene", $frames_adata_aref, $logo_frames_adl_aref, $end_framenum+1, $scene_after, $settings_href) ;
+					}
+	
+	if (!$found_edge && $DEBUG)
+	{
+		print "Bugger - failed to find edge!\n" ;
+	}
+	
+					$adl->update_gaps() ;
+					
+	dump_frames($logo_frames_adl_aref, "LOGO after re-extending") if $DEBUG >= 2 ;
 
-if (!$found_edge && $DEBUG)
-{
-	print "Bugger - failed to find edge!\n" ;
-}
-
-
-				update_gap(\@logo_frames) ;
-				
-dump_frames(\@logo_frames, "LOGO after re-extending") if $DEBUG >= 2 ;
+				} # if got some logo frames left after splice?
 			}
 
 			$prev = 0 ;
 		}
-
-		# keep a cyclic buffer of the last N samples
-		if (@frame_buffer >= $settings_href->{'logo_ave_points'})
-		{
-			shift @frame_buffer ;
-		}
-		push @frame_buffer, $href ;
-
 	}
 	
 	
 	## update gap's
-	update_gap(\@logo_frames) ;
+	$adl->update_gaps() ;
 
 	
 	## Add processed information
 	my $rise_thresh = $settings_href->{'logo_rise_threshold'} || 1 ;
 	my $fall_thresh = $settings_href->{'logo_fall_threshold'} || 1 ;
 
-dump_frames(\@logo_frames, "LOGO processed") if $DEBUG >= 2 ;
+dump_frames($logo_frames_adl_aref, "LOGO processed") if $DEBUG >= 2 ;
 
-	csv_add_frames($csv_settings_aref, $frames_href, \@logo_frames, 
+	csv_add_frames($csv_settings_aref, $frames_adata_aref, $csv_frames_aref, $logo_frames_adl_aref, 
 		$LOGO_PROCESSED_FIELD, "0:$rise_thresh/$fall_thresh:100", 'match_percent') ;
 	
 	## start by coalescing the contiguous frames
-	my @frames = coalesce_frames(\@logo_frames, $settings_href, 0) ;
+	my @frames = coalesce_frames($logo_frames_adl_aref, $settings_href, 0, "logo frames") ;
 	
 dump_frames(\@frames, "LOGO coalesced") if $DEBUG >= 2 ;
 
-	csv_add_frames($csv_settings_aref, $frames_href, \@frames, 
+	csv_add_frames($csv_settings_aref, $frames_adata_aref, $csv_frames_aref, \@frames, 
 		$LOGO_COALESCED_FIELD, "0:$rise_thresh/$fall_thresh:100", 'match_percent') ;
 		
 		
@@ -2630,9 +2735,12 @@ dump_frames(\@frames, "LOGO coalesced") if $DEBUG >= 2 ;
 #my $reduce_min_gap = 2 * $FPS ;	# need at least 2 sec gap
 
 	## calc logo match frames - used for frame end reduction
-	my @logo_match_frames = frames_matching($logo_all_frames_aref, 'match_percent', $settings_href->{'logo_rise_threshold'});
-	csv_add_frames($csv_settings_aref, $frames_href, \@logo_match_frames, 
+	my $logo_match_frames_aref = frames_matching($logo_all_frames_ada_aref, 'match_percent', $settings_href->{'logo_rise_threshold'});
+	csv_add_frames($csv_settings_aref, $frames_adata_aref, $csv_frames_aref, $logo_match_frames_aref, 
 		'logo_match', "0:$rise_thresh/$rise_thresh:100", 'match_percent') ;
+
+
+#dump_frames($logo_match_frames_aref, "LOGO match frames") ;
 	
 	## process end reduction
 	if ($settings_href->{'reduce_end'})
@@ -2641,10 +2749,10 @@ dump_frames(\@frames, "LOGO coalesced") if $DEBUG >= 2 ;
 		## the window of the end
 		foreach my $frame_href (@frames)
 		{
-			frames_reduce_end($frame_href, \@logo_match_frames, $settings_href->{'reduce_end'}, $settings_href->{'reduce_min_gap'}) ;
+			frames_reduce_end($frame_href, $logo_match_frames_aref, $settings_href->{'reduce_end'}, $settings_href->{'reduce_min_gap'}) ;
 		}		
 
-		csv_add_frames($csv_settings_aref, $frames_href, \@frames, 
+		csv_add_frames($csv_settings_aref, $frames_adata_aref, $csv_frames_aref, \@frames, 
 			$REDUCED_LOGO_COALESCED_FIELD, "0:$rise_thresh/$fall_thresh:100", 'match_percent') ;
 
 	}
@@ -2732,6 +2840,7 @@ dump_frames(\@blocks, "Logo Blocks") if $DEBUG ;
 	return @cut_list ;
 }
 
+
 #-----------------------------------------------------------------------------
 sub _no_once_warning
 {
@@ -2739,11 +2848,133 @@ sub _no_once_warning
 }
 
 
+#-----------------------------------------------------------------------------
+sub read_adv
+{
+	my ($advfile) = @_ ;	
+	
+	my %adv ;
+	open my $fh, "<$advfile" or die "Error: unable to read to adv file $advfile : $!" ;
+	my $line = "" ;
+	my @head ;
+	my $file_settings_href = {} ;
+		
+	while (defined($line=<$fh>))
+	{
+		chomp $line ;
+		$line =~ s/#.*$// ;
+		$line =~ s/\s+$// ;
+		$line =~ s/^\s+// ;
+		next unless $line ;
+		
+		my @fields = split(/,/, $line) ;
+		
+		## Save frames
+		# first line is fields definition
+		if (@head)
+		{
+			# got head, so save data
+			my $href = {} ;
+			my $framenum ;
+			for(my $i=0; $i < scalar(@head); ++$i)
+			{
+				$href->{$head[$i]} = $fields[$i] ;
+										
+				$framenum = $fields[$i] if $head[$i] eq $FRAME_FIELD ;
+					
+			}
+			$adv{$framenum} = $href if defined($framenum) ;
+		}
+		else
+		{
+			# get head
+			@head = @fields ;
+			
+			foreach my $head (@head)
+			{
+				$head =~ s/\s*\[.*$// ;
+			}
+		}
+	}
+	close $fh ;
+
+	return \%adv ;
+}
+
+
+#-----------------------------------------------------------------------------
+sub adv_to_cutlist
+{
+	my ($adv_href) = @_ ;	
+	
+	my @cutlist ;
+	my $prog ;
+	my $cut_href ;
+	foreach my $framenum (sort {$a <=> $b} keys %$adv_href)
+	{
+		#			          ____________
+		#	prog	_________|            |_______________
+		#			
+		#	cut     s--------e            s---------------e
+		#	
+		#			____________
+		#	prog	            |_______________
+		#			
+		#	cut                 s---------------e
+		#	
+		my $prog_change = !defined($prog) || ($prog != $adv_href->{$framenum}{$PROG_FIELD}) ;
+		$prog = $adv_href->{$framenum}{$PROG_FIELD} ;
+		
+		# look for start of advert 
+		if (!$prog && $prog_change )
+		{
+			$cut_href = {
+				$FRAME_FIELD		=> $adv_href->{$framenum}{$FRAME_FIELD},
+				$FRAME_END_FIELD	=> $adv_href->{$framenum}{$FRAME_FIELD},
+				$PACKET_FIELD		=> $adv_href->{$framenum}{$PACKET_FIELD},
+				$PACKET_END_FIELD	=> $adv_href->{$framenum}{$PACKET_END_FIELD},
+			} ;
+		}
+		
+		# keep track of end of advert
+		if (!$prog)
+		{
+			$cut_href->{$FRAME_END_FIELD} = $adv_href->{$framenum}{$FRAME_FIELD} ;
+			$cut_href->{$PACKET_END_FIELD} = $adv_href->{$framenum}{$PACKET_END_FIELD} ;
+		}
+		
+		# look for end
+		if ($prog && $prog_change )
+		{
+			if ($cut_href)
+			{
+				push @cutlist, $cut_href ;
+				$cut_href = undef ;
+			}
+		}
+	}
+
+	# catch end of video
+	if ($cut_href)
+	{
+		push @cutlist, $cut_href ;
+	}
+
+	return @cutlist ;
+}
 
 # ============================================================================================
 # END OF PACKAGE
 
 1;
+
+#Start of analyse: Memory used 50.6484375 MB (since last call 50.6484375 MB)
+# + created ADA arrays: Memory used 179.1953125 MB (since last call 128.546875 MB)
+# + got settings: Memory used 179.19921875 MB (since last call 0.00390625 MB)
+#Black detect: Memory used 179.19921875 MB (since last call 0 MB)
+#Logo detect: Memory used 189.3984375 MB (since last call 10.19921875 MB)
+#Detect end: Memory used 940.23046875 MB (since last call 750.83203125 MB)
+#End of analyse: Memory used 1313.71484375 MB (since last call 373.484375 MB)
 
 __END__
 

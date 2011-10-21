@@ -10,10 +10,33 @@
 extern int get_framesize() ;
 extern int get_framenum() ;
 
+//===========================================================================================================================
+// CONSTANTS
+//===========================================================================================================================
+
+// Audio default Perl settings
+#define AUDIO_max_advert			(4*60*FPS)
+#define AUDIO_min_advert			(2*60*FPS)
+#define AUDIO_min_program			(5*60*FPS)
+#define AUDIO_start_pad				(2*60*FPS)
+#define AUDIO_end_pad				(2*60*FPS)
+#define AUDIO_min_frames 	 		2
+#define AUDIO_frame_window 	 		(4*60*FPS)
+#define AUDIO_max_gap 		 		(10*FPS)
+#define AUDIO_reduce_end			0
+#define AUDIO_reduce_min_gap	 	0
+
+//===========================================================================================================================
+// MACROS
+//===========================================================================================================================
 
 // print debug if debug setting is high enough
 #define audio_dbg_prt(LVL, ARGS)	\
 		if (settings->debug >= LVL)	printf ARGS
+
+//===========================================================================================================================
+// FUNCTIONS
+//===========================================================================================================================
 
 
 //---------------------------------------------------------------------------------------------------------------------------
@@ -36,6 +59,22 @@ void audio_init_settings(struct Ad_audio_settings *settings)
 	settings->debug = 0 ;
 	settings->scale = 1 ;
 	settings->silence_threshold = -80 ;
+
+	settings->silence_window = 100 ;
+
+	// set_perl_settings(settings, mx_ad, mn_ad, mn_pr, s_pd, e_pd, mn_fr, fr_wn, mx_gp, r_en, r_mn_gp)
+	set_perl_settings(settings,
+		AUDIO_max_advert,
+		AUDIO_min_advert,
+		AUDIO_min_program,
+		AUDIO_start_pad,
+		AUDIO_end_pad,
+		AUDIO_min_frames,
+		AUDIO_frame_window,
+		AUDIO_max_gap,
+		AUDIO_reduce_end,
+		AUDIO_reduce_min_gap
+	) ;
 }
 
 //---------------------------------------------------------------------------------------------------------------------------

@@ -6,6 +6,9 @@
 #ifndef AD_LOGO_STRUCT_H_
 #define AD_LOGO_STRUCT_H_
 
+#include "ad_perl_struct.h"
+
+
 #define MAX_LOGO_AVE		512
 
 // edge detect values
@@ -40,6 +43,12 @@ struct Ad_logo_settings {
 	unsigned logo_ok_percent ;
 	unsigned logo_max_percentage_of_screen ;
 	unsigned logo_ave_points ;
+
+	// Perl settings
+	struct Ad_perl_settings perl_set ;
+	unsigned logo_rise_threshold;
+	unsigned logo_fall_threshold;
+
 
 } ;
 

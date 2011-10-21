@@ -14,6 +14,45 @@
 #define advert_dbg_prt(LVL, ARGS)	\
 		if (user_data->debug >= LVL)	printf ARGS
 
+//===========================================================================================================================
+
+#define _PRT(REG, REGION, NAME)	printf("%s.%s = %d\n", #REGION, #NAME, user_data->REG.NAME)
+#define _PRT_FRAME(NAME)		_PRT(frame_settings, frame, NAME)
+#define _PRT_LOGO(NAME)			_PRT(logo_settings, logo, NAME)
+#define _PRT_AUDIO(NAME)		_PRT(audio_settings, audio, NAME)
+
+void dbg_print_settings(struct Ad_user_data *user_data)
+{
+	printf("User Settings\n");
+	printf("=============\n");
+
+	_PRT_FRAME(max_black) ;
+	_PRT_FRAME(window_percent) ;
+	_PRT_FRAME(max_brightness) ;
+	_PRT_FRAME(test_brightness) ;
+	_PRT_FRAME(brightness_jump) ;
+	_PRT_FRAME(schange_cutlevel) ;
+	_PRT_FRAME(schange_jump) ;
+	_PRT_FRAME(noise_level) ;
+	_PRT_FRAME(remove_logo) ;
+
+
+	_PRT_LOGO(window_percent) ;
+	_PRT_LOGO(logo_window) ;
+	_PRT_LOGO(logo_edge_radius) ;
+	_PRT_LOGO(logo_edge_step) ;
+	_PRT_LOGO(logo_edge_threshold) ;
+	_PRT_LOGO(logo_checking_period) ;
+	_PRT_LOGO(logo_skip_frames) ;
+	_PRT_LOGO(logo_num_checks) ;
+	_PRT_LOGO(logo_ok_percent) ;
+	_PRT_LOGO(logo_max_percentage_of_screen) ;
+	_PRT_LOGO(logo_ave_points) ;
+
+	_PRT_AUDIO(scale) ;
+	_PRT_AUDIO(silence_threshold) ;
+
+}
 
 //===========================================================================================================================
 // PTS / Frame number utils
@@ -70,6 +109,16 @@ void free_results(struct Ad_user_data *user_data)
 		user_data->results_array_size = 0 ;
 		free(user_data->results_array) ;
 		user_data->results_array = NULL ;
+	}
+}
+
+//---------------------------------------------------------------------------------------------------------------------------
+// Free the results list
+void free_results_list(struct Ad_user_data *user_data)
+{
+	if (user_data->results_list)
+	{
+		free(user_data->results_list) ;
 	}
 }
 
@@ -161,7 +210,28 @@ dump_audio_results(i, &user_data->results_array[i].audio_results) ;
 // Post process results
 void post_process_results(struct Ad_user_data *user_data)
 {
-	//?????????????
+unsigned i, video_framenum ;
+
+	user_data->results_list = (struct Ad_results_list_entry *)malloc(user_data->results_array_size * sizeof(struct Ad_results_list_entry)) ;
+	memset(user_data->results_list, 0, user_data->results_array_size * sizeof(struct Ad_results_list_entry)) ;
+
+    // set frame numbers
+	// Create the monotonic list
+	user_data->results_list_size = 0 ;
+	for (i=0; i < user_data->results_array_size; i++)
+	{
+		// only output if we have some results for this frame entry (create monotonically increasing frame count)
+		if (user_data->results_array[i].valid_frame)
+		{
+			// set real frame number
+			user_data->results_array[i].video_framenum = user_data->results_list_size ;
+
+			// set the monotonic list to point to this entry
+			user_data->results_list[user_data->results_list_size].results = &user_data->results_array[i] ;
+			user_data->results_list[user_data->results_list_size++].idx = i ;
+		}
+	}
+
 }
 
 //===========================================================================================================================
@@ -261,10 +331,16 @@ void init_user_data(struct Ad_user_data *user_data)
 	logo_detector_init(&user_data->logo_settings, &user_data->logo_state) ;
 	audio_detector_init(&user_data->audio_settings, &user_data->audio_state) ;
 
+	// perl settings
+	set_default_perl_settings(user_data) ;
+
+
 	//////////////////////////////
 	// Results
 	user_data->results_array_size = 0 ;
 	user_data->results_array = NULL ;
+	user_data->results_list_size = 0 ;
+	user_data->results_list = NULL ;
 
 	frame_init_totals(&user_data->frame_totals) ;
 	logo_init_totals(&user_data->logo_totals) ;
@@ -285,8 +361,8 @@ void free_user_data(struct Ad_user_data *user_data)
 	// free results
 	free_results(user_data) ;
 
-
 	// free local data
+	free_results_list(user_data) ;
 
 }
 
@@ -656,7 +732,7 @@ struct TS_reader *tsreader ;
     // Do any post-run cleanup/processing
     post_process_results(user_data) ;
 
-    if (user_data->debug)
+    if (user_data->debug >= 10)
     	dump_results_list(user_data) ;
 
     return (ERR_NONE) ;
